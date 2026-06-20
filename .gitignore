@@ -1,0 +1,25 @@
+# ── Node / Vite (frontend-react) ──
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# ── Gradle / Java (backend) ──
+.gradle/
+build/
+bin/
+
+# ── IDE ──
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log
