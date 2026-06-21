@@ -14,8 +14,8 @@ FROM (
              ) AS rn
          FROM archive
          WHERE
-             ((username LIKE CONCAT('%', :username, '%') AND peer LIKE '%help%')
-                 OR (username LIKE '%help%' AND peer LIKE CONCAT('%', :username, '%')))
+             ((username LIKE CONCAT('%', :username, '%') AND peer LIKE 'help%')
+                 OR (username LIKE 'help%' AND peer LIKE CONCAT('%', :username, '%')))
            AND created_at BETWEEN :start AND :end
            AND txt != ' '
      ) AS subquery

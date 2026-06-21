@@ -31,16 +31,16 @@ FROM (
             FROM (
                 SELECT
                     created_at,
-                    CASE WHEN username LIKE '%help%'
+                    CASE WHEN username LIKE 'help%'
                          THEN SUBSTRING_INDEX(peer, '@', 1)
                          ELSE username END AS user_key,
-                    CASE WHEN username LIKE '%help%' THEN 'out' ELSE 'in' END AS direction
+                    CASE WHEN username LIKE 'help%' THEN 'out' ELSE 'in' END AS direction
                 FROM archive
                 WHERE created_at >= :start
                   AND created_at < :endExclusive
                   AND txt IS NOT NULL
                   AND txt != ' '
-                  AND (peer LIKE '%help%' OR username LIKE '%help%')
+                  AND (peer LIKE 'help%' OR username LIKE 'help%')
                   ${groupFilter}
             ) AS classified
             WINDOW w AS (PARTITION BY user_key ORDER BY created_at)
