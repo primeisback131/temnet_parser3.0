@@ -88,8 +88,8 @@ public class MetricsRepository {
                 ? """
                   AND EXISTS (SELECT 1 FROM sr_user su
                               WHERE SUBSTRING_INDEX(su.jid, '@', 1) =
-                                    CASE WHEN username LIKE '%help%'
-                                         THEN SUBSTRING_INDEX(peer, '@', 1)
+                                    CASE WHEN username LIKE 'help%'
+                                         THEN SUBSTRING_INDEX(bare_peer, '@', 1)
                                          ELSE username END
                                 AND su.grp = :groupName)
                   """
@@ -149,7 +149,10 @@ public class MetricsRepository {
         String filter = hasGroup
                 ? """
                   AND EXISTS (SELECT 1 FROM sr_user su
-                              WHERE SUBSTRING_INDEX(su.jid, '@', 1) = client
+                              WHERE SUBSTRING_INDEX(su.jid, '@', 1) =
+                                    CASE WHEN username LIKE 'help%'
+                                         THEN SUBSTRING_INDEX(bare_peer, '@', 1)
+                                         ELSE username END
                                 AND su.grp = :groupName)
                   """
                 : "";
