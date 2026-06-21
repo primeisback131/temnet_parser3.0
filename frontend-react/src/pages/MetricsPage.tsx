@@ -40,12 +40,15 @@ export default function MetricsPage() {
     return { named, other, classifiedPct };
   }, [categories]);
 
-  // Overall first-response time, weighted by the number of responses per bucket.
+  // Overall first-response time, weighted by responses per bucket. The median
+  // is the representative "typical" SLA (stable, robust to the long tail); the
+  // mean is shown secondarily because it is inflated by slow cross-day replies.
   const overallFrt = useMemo(() => {
     const totalResponses = sla.reduce((n, p) => n + p.responses, 0);
     if (totalResponses === 0) return null;
-    const weighted = sla.reduce((n, p) => n + p.avgSeconds * p.responses, 0);
-    return weighted / totalResponses;
+    const mean = sla.reduce((n, p) => n + p.avgSeconds * p.responses, 0) / totalResponses;
+    const median = sla.reduce((n, p) => n + p.p50Seconds * p.responses, 0) / totalResponses;
+    return { mean, median };
   }, [sla]);
 
   const totals = useMemo(
@@ -300,7 +303,8 @@ export default function MetricsPage() {
         extra={
           overallFrt != null ? (
             <span>
-              В среднем: <b style={{ color: "#9254de" }}>{humanizeSeconds(overallFrt)}</b>
+              Медиана: <b style={{ color: "#21b573" }}>{humanizeSeconds(overallFrt.median)}</b>
+              <span style={{ color: "#8c8c8c" }}> · среднее {humanizeSeconds(overallFrt.mean)}</span>
             </span>
           ) : null
         }
