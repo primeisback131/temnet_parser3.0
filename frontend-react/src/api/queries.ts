@@ -65,3 +65,10 @@ export function useCategories(start: string, end: string, groupName: string | nu
     queryFn: () => api.getCategories(start, end, groupName ?? undefined),
   });
 }
+
+export function useOperators(start: string, end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["operators", start, end, groupName],
+    queryFn: () => api.getOperators(start, end, groupName ?? undefined),
+  });
+}

@@ -6,6 +6,7 @@ import type {
   Group,
   HeatmapCell,
   MetricPoint,
+  OperatorStat,
   SlaPoint,
   UserStat,
 } from "./types";
@@ -63,6 +64,13 @@ export const api = {
 
   getCategories: (start: string, end: string, groupName?: string) =>
     getJson<CategoryCount[]>("/metrics/categories", {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getOperators: (start: string, end: string, groupName?: string) =>
+    getJson<OperatorStat[]>("/metrics/operators", {
       start,
       end,
       ...(groupName ? { groupName } : {}),

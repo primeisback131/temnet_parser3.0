@@ -53,3 +53,12 @@ export interface CategoryCount {
   category: string;
   requests: number;
 }
+
+export interface OperatorStat {
+  operator: string;
+  messages: number;
+  closed: number;
+  rejected: number;
+  clients: number;
+  avgReplySeconds: number | null;
+}

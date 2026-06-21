@@ -4,6 +4,7 @@ import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.support.CategoryRules;
 import com.temnet.temnet_parser.support.SqlLoader;
@@ -21,6 +22,7 @@ public class MetricsRepository {
     private static final String HEATMAP_SQL = SqlLoader.load("sql/heatmap.sql");
     private static final String SLA_SQL = SqlLoader.load("sql/sla.sql");
     private static final String CATEGORIES_SQL = SqlLoader.load("sql/categories.sql");
+    private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
 
     // Replies later than this are treated as overnight/cross-session, not a
     // first response, and excluded from the average (8 hours).
@@ -133,6 +135,31 @@ public class MetricsRepository {
         }
 
         return spec.query(new DataClassRowMapper<>(CategoryCount.class)).list();
+    }
+
+    /** Per-operator leaderboard for the period (optionally limited to a group's clients). */
+    public List<OperatorStat> operators(LocalDate start, LocalDate end, String groupName) {
+        boolean hasGroup = groupName != null && !groupName.isBlank();
+
+        String filter = hasGroup
+                ? """
+                  AND EXISTS (SELECT 1 FROM sr_user su
+                              WHERE SUBSTRING_INDEX(su.jid, '@', 1) = client
+                                AND su.grp = :groupName)
+                  """
+                : "";
+
+        String sql = OPERATORS_SQL.replace("${groupFilter}", filter);
+
+        var spec = jdbcClient.sql(sql)
+                .param("start", start)
+                .param("endExclusive", end.plusDays(1))
+                .param("maxReplySeconds", MAX_FRT_SECONDS);
+        if (hasGroup) {
+            spec = spec.param("groupName", groupName);
+        }
+
+        return spec.query(new DataClassRowMapper<>(OperatorStat.class)).list();
     }
 
     private static String groupFilter(boolean hasGroup) {

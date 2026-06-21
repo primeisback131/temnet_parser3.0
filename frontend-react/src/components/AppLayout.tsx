@@ -1,4 +1,10 @@
-import { BankOutlined, LineChartOutlined, MessageOutlined, TeamOutlined } from "@ant-design/icons";
+import {
+  BankOutlined,
+  CustomerServiceOutlined,
+  LineChartOutlined,
+  MessageOutlined,
+  TeamOutlined,
+} from "@ant-design/icons";
 import { Layout, Menu } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -9,6 +15,7 @@ const items = [
   { key: "/metrics", icon: <LineChartOutlined />, label: "Метрики" },
   { key: "/companies", icon: <BankOutlined />, label: "Статистика компаний" },
   { key: "/users", icon: <TeamOutlined />, label: "Статистика пользователей" },
+  { key: "/operators", icon: <CustomerServiceOutlined />, label: "Операторы" },
 ];
 
 export default function AppLayout() {

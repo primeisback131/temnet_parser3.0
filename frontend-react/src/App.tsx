@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import ChatPage from "./pages/ChatPage";
 import CompaniesPage from "./pages/CompaniesPage";
+import OperatorsPage from "./pages/OperatorsPage";
 import UsersPage from "./pages/UsersPage";
 
 // Lazy-loaded so the heavy ECharts bundle only loads when /metrics is visited.
@@ -25,6 +26,7 @@ export default function App() {
         />
         <Route path="/companies" element={<CompaniesPage />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/operators" element={<OperatorsPage />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Route>
     </Routes>
