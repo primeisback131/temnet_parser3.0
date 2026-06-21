@@ -28,6 +28,10 @@ public class MetricsRepository {
     // first response, and excluded from the average (8 hours).
     private static final int MAX_FRT_SECONDS = 8 * 3600;
 
+    // A pause longer than this in a conversation starts a new request/session
+    // for categorization (15 minutes — calibrated against closed-ticket counts).
+    private static final int SESSION_GAP_SECONDS = 15 * 60;
+
     private final JdbcClient jdbcClient;
 
     public MetricsRepository(JdbcClient jdbcClient) {
@@ -129,7 +133,8 @@ public class MetricsRepository {
 
         var spec = jdbcClient.sql(sql)
                 .param("start", start)
-                .param("endExclusive", end.plusDays(1));
+                .param("endExclusive", end.plusDays(1))
+                .param("sessionGapSeconds", SESSION_GAP_SECONDS);
         if (hasGroup) {
             spec = spec.param("groupName", groupName);
         }

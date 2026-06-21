@@ -26,7 +26,7 @@ public final class CategoryRules {
             new Category("Печать", List.of("принтер", "печат", "картридж", "сканер", "мфу", "kyocera")),
             new Category("Телефония", List.of("телефон", "атс", "sip", "сип", "микросип", "звон")),
             new Category("Почта", List.of("почт", "п/я", "outlook", "ящик", "письм", "mail")),
-            new Category("Удалёнка", List.of("vpn", "впн", "openvpn", "anydesk", "энидеск", "teamviewer", "rdp", "удаленк", "удалёнк", "удаленн", "удалённ")),
+            new Category("Удалёнка", List.of("vpn", "впн", "openvpn", "rdp", "удаленк", "удалёнк", "удаленн", "удалённ")),
             new Category("Сеть", List.of("интернет", "wi-fi", "вай-фай", "роутер", "сеть")),
             new Category("Программы/ПО", List.of("эксель", "excel", "ворд", "word", "офис", "office", "браузер", "гугл", "хром", "chrome", "битрикс", "миранда", "vk teams", "vkteams")),
             new Category("Доступ", List.of("пароль", "логин", "доступ", "заблокир", "учетн", "учётн")),

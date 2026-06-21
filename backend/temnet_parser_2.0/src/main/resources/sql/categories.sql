@@ -1,8 +1,9 @@
 -- Classify each client REQUEST into a problem category, then count per
--- category. A request = one inbound "burst" (the client's consecutive messages
--- until the operator replies). The category is the highest-priority keyword
--- match across ALL the client's messages in that burst, so an opening greeting
--- followed by the actual problem is classified correctly.
+-- category. A request = a conversation "session": a client's messages grouped
+-- so that a pause longer than :sessionGapSeconds starts a new session. This
+-- matches a support ticket far better than counting every message (a single
+-- ticket has many back-and-forth turns). The category is the highest-priority
+-- keyword match across all the client's messages in the session.
 SELECT
     ${rankToName} AS category,
     COUNT(*)      AS requests
@@ -12,37 +13,36 @@ FROM (
         SELECT
             user_key,
             direction,
-            SUM(is_start) OVER (PARTITION BY user_key ORDER BY created_at) AS burst_id,
-            ${rankCase} AS cat_rank
+            ${rankCase} AS cat_rank,
+            SUM(is_start) OVER (PARTITION BY user_key ORDER BY created_at) AS session_id
         FROM (
             SELECT
                 created_at,
                 txt,
                 user_key,
                 direction,
-                CASE WHEN direction = 'in' AND (prev_direction IS NULL OR prev_direction = 'out')
+                CASE WHEN LAG(created_at) OVER w IS NULL
+                       OR TIMESTAMPDIFF(SECOND, LAG(created_at) OVER w, created_at) > :sessionGapSeconds
                      THEN 1 ELSE 0 END AS is_start
             FROM (
                 SELECT
                     created_at,
                     txt,
-                    CASE WHEN username LIKE '%help%' THEN SUBSTRING_INDEX(peer, '@', 1) ELSE username END AS user_key,
-                    CASE WHEN username LIKE '%help%' THEN 'out' ELSE 'in' END AS direction,
-                    LAG(CASE WHEN username LIKE '%help%' THEN 'out' ELSE 'in' END)
-                        OVER (PARTITION BY CASE WHEN username LIKE '%help%' THEN SUBSTRING_INDEX(peer, '@', 1) ELSE username END
-                              ORDER BY created_at) AS prev_direction
+                    CASE WHEN username LIKE 'help%' THEN SUBSTRING_INDEX(peer, '@', 1) ELSE username END AS user_key,
+                    CASE WHEN username LIKE 'help%' THEN 'out' ELSE 'in' END AS direction
                 FROM archive
                 WHERE created_at >= :start
                   AND created_at < :endExclusive
                   AND txt IS NOT NULL
                   AND txt != ' '
-                  AND (peer LIKE '%help%' OR username LIKE '%help%')
+                  AND (username LIKE 'help%' OR peer LIKE 'help%')
             ) AS base
+            WINDOW w AS (PARTITION BY user_key ORDER BY created_at)
         ) AS flagged
-    ) AS bursts
+    ) AS sessioned
     WHERE direction = 'in'
       ${groupFilter}
-    GROUP BY user_key, burst_id
-) AS per_request
+    GROUP BY user_key, session_id
+) AS per_session
 GROUP BY category
 ORDER BY requests DESC
