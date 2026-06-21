@@ -1,15 +1,16 @@
--- First response time (FRT). Robust to ejabberd MAM double-storage: each
--- message is stored once per participant, so we first DEDUPLICATE the two
--- copies and recover the true author.
+-- First response time (FRT) — ONE value per ticket (request), not per message.
 --
--- Author/direction rule: the recipient's copy stores `peer` as the sender's
--- FULL jid (with a /resource); the sender's copy stores a bare `peer`. So the
--- author is the peer's local part when `peer` has a resource, else `username`.
--- A message is an operator reply ('out') iff its author starts with 'help'.
+-- A ticket starts with a client message that opens a new conversation session:
+-- either there is no previous message, or the pause since the previous message
+-- exceeds :sessionGapSeconds (same 15-min rule as categorization). Client
+-- follow-ups inside a ticket are NOT new measurement points. FRT = seconds from
+-- that opening client message to the next operator reply, capped at
+-- :maxFrtSeconds.
 --
--- For each inbound client burst-start, FRT = seconds to the next operator
--- reply in the same conversation, capped at :maxFrtSeconds. Per bucket we
--- report count, average, median (p50) and p90.
+-- Robust to ejabberd MAM double-storage: the two copies of each message are
+-- deduplicated and the true author is recovered from `peer` (the recipient's
+-- copy carries the sender's full jid with a /resource; the sender's copy is
+-- bare). A message is an operator reply ('out') iff its author starts 'help'.
 SELECT DISTINCT
     bucket,
     COUNT(*)         OVER (PARTITION BY bucket) AS responses,
@@ -28,7 +29,7 @@ FROM (
             SELECT
                 created_at,
                 direction,
-                LAG(direction) OVER w AS prev_direction,
+                LAG(created_at) OVER w AS prev_created,
                 MIN(CASE WHEN direction = 'out' THEN created_at END)
                     OVER (PARTITION BY client ORDER BY created_at
                           ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS next_out
@@ -48,9 +49,10 @@ FROM (
                   ${groupFilter}
             ) AS dedup
             WINDOW w AS (PARTITION BY client ORDER BY created_at)
-        ) AS bursts
+        ) AS marked
         WHERE direction = 'in'
-          AND (prev_direction IS NULL OR prev_direction = 'out')
+          AND (prev_created IS NULL
+               OR TIMESTAMPDIFF(SECOND, prev_created, created_at) > :sessionGapSeconds)
           AND next_out IS NOT NULL
     ) AS frt
     WHERE frt_seconds <= :maxFrtSeconds

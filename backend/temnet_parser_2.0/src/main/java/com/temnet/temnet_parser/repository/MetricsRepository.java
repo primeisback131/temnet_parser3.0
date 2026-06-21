@@ -102,7 +102,8 @@ public class MetricsRepository {
         var spec = jdbcClient.sql(sql)
                 .param("start", start)
                 .param("endExclusive", end.plusDays(1))
-                .param("maxFrtSeconds", MAX_FRT_SECONDS);
+                .param("maxFrtSeconds", MAX_FRT_SECONDS)
+                .param("sessionGapSeconds", SESSION_GAP_SECONDS);
         if (hasGroup) {
             spec = spec.param("groupName", groupName);
         }
