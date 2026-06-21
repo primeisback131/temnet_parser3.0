@@ -1,6 +1,7 @@
 package com.temnet.temnet_parser.service;
 
 import com.temnet.temnet_parser.dto.Bucket;
+import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
@@ -38,5 +39,12 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.sla(start, end, groupName, bucket);
+    }
+
+    public List<CategoryCount> categories(LocalDate start, LocalDate end, String groupName) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.categories(start, end, groupName);
     }
 }

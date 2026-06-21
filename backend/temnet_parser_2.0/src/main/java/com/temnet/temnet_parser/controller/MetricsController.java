@@ -1,6 +1,7 @@
 package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.Bucket;
+import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
@@ -50,5 +51,13 @@ public class MetricsController {
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
         return metricsService.sla(start, end, groupName, Bucket.from(bucket));
+    }
+
+    @GetMapping("/categories")
+    public List<CategoryCount> categories(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.categories(start, end, groupName);
     }
 }

@@ -48,3 +48,8 @@ export interface SlaPoint {
   responses: number;
   avgSeconds: number;
 }
+
+export interface CategoryCount {
+  category: string;
+  requests: number;
+}

@@ -58,3 +58,10 @@ export function useSla(start: string, end: string, bucket: Bucket, groupName: st
     queryFn: () => api.getSla(start, end, bucket, groupName ?? undefined),
   });
 }
+
+export function useCategories(start: string, end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["categories", start, end, groupName],
+    queryFn: () => api.getCategories(start, end, groupName ?? undefined),
+  });
+}

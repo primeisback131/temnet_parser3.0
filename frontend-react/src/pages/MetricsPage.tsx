@@ -2,7 +2,7 @@ import { Card, Col, DatePicker, Row, Segmented, Select, Space, Statistic } from 
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
-import { useGroups, useHeatmap, useSla, useTimeseries } from "../api/queries";
+import { useCategories, useGroups, useHeatmap, useSla, useTimeseries } from "../api/queries";
 import type { Bucket } from "../api/types";
 import EChart from "../components/EChart";
 import { defaultRange, toApiDate } from "../lib/date";
@@ -37,6 +37,15 @@ export default function MetricsPage() {
   const { data = [], isFetching } = useTimeseries(startStr, endStr, bucket, group);
   const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
   const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
+  const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
+
+  const categoryStats = useMemo(() => {
+    const named = categories.filter((c) => c.category !== "Другое");
+    const other = categories.find((c) => c.category === "Другое")?.requests ?? 0;
+    const total = categories.reduce((n, c) => n + c.requests, 0);
+    const classifiedPct = total > 0 ? Math.round(((total - other) / total) * 100) : 0;
+    return { named, other, classifiedPct };
+  }, [categories]);
 
   // Overall first-response time, weighted by the number of responses per bucket.
   const overallFrt = useMemo(() => {
@@ -121,6 +130,24 @@ export default function MetricsPage() {
       ],
     };
   }, [data, labelFormat]);
+
+  const categoriesOption = useMemo<EChartsOption>(() => {
+    const named = categoryStats.named;
+    return {
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+      grid: { left: 120, right: 48, top: 8, bottom: 24 },
+      xAxis: { type: "value" },
+      yAxis: { type: "category", data: named.map((c) => c.category), inverse: true },
+      series: [
+        {
+          type: "bar",
+          data: named.map((c) => c.requests),
+          itemStyle: { color: "#3e79f7", borderRadius: [0, 4, 4, 0] },
+          label: { show: true, position: "right" },
+        },
+      ],
+    };
+  }, [categoryStats]);
 
   const slaOption = useMemo<EChartsOption>(() => {
     const labels = sla.map((p) => dayjs(p.bucket).format(labelFormat));
@@ -279,6 +306,18 @@ export default function MetricsPage() {
         }
       >
         <EChart option={heatmapOption} loading={heatmapLoading} height={300} />
+      </Card>
+
+      <Card
+        title="Категории обращений"
+        extra={
+          <span style={{ color: "#8c8c8c" }}>
+            Классифицировано: <b>{categoryStats.classifiedPct}%</b> · Другое:{" "}
+            {categoryStats.other.toLocaleString("ru-RU")}
+          </span>
+        }
+      >
+        <EChart option={categoriesOption} loading={categoriesLoading} height={340} />
       </Card>
     </Space>
   );

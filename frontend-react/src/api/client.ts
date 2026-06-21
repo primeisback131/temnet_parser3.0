@@ -1,5 +1,6 @@
 import type {
   Bucket,
+  CategoryCount,
   ChatMessage,
   Company,
   Group,
@@ -57,6 +58,13 @@ export const api = {
       start,
       end,
       bucket,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getCategories: (start: string, end: string, groupName?: string) =>
+    getJson<CategoryCount[]>("/metrics/categories", {
+      start,
+      end,
       ...(groupName ? { groupName } : {}),
     }),
 };

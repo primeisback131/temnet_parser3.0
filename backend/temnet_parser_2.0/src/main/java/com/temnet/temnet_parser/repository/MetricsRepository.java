@@ -1,9 +1,11 @@
 package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.Bucket;
+import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.support.CategoryRules;
 import com.temnet.temnet_parser.support.SqlLoader;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -18,6 +20,7 @@ public class MetricsRepository {
     private static final String TIMESERIES_SQL = SqlLoader.load("sql/timeseries.sql");
     private static final String HEATMAP_SQL = SqlLoader.load("sql/heatmap.sql");
     private static final String SLA_SQL = SqlLoader.load("sql/sla.sql");
+    private static final String CATEGORIES_SQL = SqlLoader.load("sql/categories.sql");
 
     // Replies later than this are treated as overnight/cross-session, not a
     // first response, and excluded from the average (8 hours).
@@ -99,6 +102,37 @@ public class MetricsRepository {
         }
 
         return spec.query(new DataClassRowMapper<>(SlaPoint.class)).list();
+    }
+
+    /**
+     * Count of client requests per problem category. Only the opening message
+     * of each inbound burst is classified, so the unit is one request, not one
+     * message. A group is matched by the client being a member of it.
+     */
+    public List<CategoryCount> categories(LocalDate start, LocalDate end, String groupName) {
+        boolean hasGroup = groupName != null && !groupName.isBlank();
+
+        String filter = hasGroup
+                ? """
+                  AND EXISTS (SELECT 1 FROM sr_user su
+                              WHERE SUBSTRING_INDEX(su.jid, '@', 1) = user_key
+                                AND su.grp = :groupName)
+                  """
+                : "";
+
+        String sql = CATEGORIES_SQL
+                .replace("${rankCase}", CategoryRules.rankExpression("txt"))
+                .replace("${rankToName}", CategoryRules.rankToNameExpression("min_rank"))
+                .replace("${groupFilter}", filter);
+
+        var spec = jdbcClient.sql(sql)
+                .param("start", start)
+                .param("endExclusive", end.plusDays(1));
+        if (hasGroup) {
+            spec = spec.param("groupName", groupName);
+        }
+
+        return spec.query(new DataClassRowMapper<>(CategoryCount.class)).list();
     }
 
     private static String groupFilter(boolean hasGroup) {
