@@ -1,4 +1,4 @@
-import { Card, DatePicker, Select, Space, Table, Tag } from "antd";
+import { Card, DatePicker, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useState } from "react";
 import { useGroups, useOperators } from "../api/queries";
@@ -25,7 +25,11 @@ const columns: ColumnsType<OperatorStat> = [
   { title: "Сообщений", dataIndex: "messages", sorter: (a, b) => a.messages - b.messages },
   { title: "Клиентов", dataIndex: "clients", sorter: (a, b) => a.clients - b.clients },
   {
-    title: "Ср. время ответа",
+    title: (
+      <Tooltip title="От последнего сообщения клиента до ответа оператора. Отличается от «времени первого ответа» в разделе Метрики, которое считается от начала обращения.">
+        Ср. задержка ответа
+      </Tooltip>
+    ),
     dataIndex: "avgReplySeconds",
     sorter: (a, b) => (a.avgReplySeconds ?? Infinity) - (b.avgReplySeconds ?? Infinity),
     render: (v: number | null) => humanizeSeconds(v),

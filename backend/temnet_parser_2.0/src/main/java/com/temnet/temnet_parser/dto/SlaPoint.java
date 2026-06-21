@@ -10,6 +10,8 @@ import java.time.LocalDate;
 public record SlaPoint(
         LocalDate bucket,
         Long responses,
-        Double avgSeconds
+        Double avgSeconds,
+        Double p50Seconds,
+        Double p90Seconds
 ) {
 }

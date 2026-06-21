@@ -150,10 +150,17 @@ export default function MetricsPage() {
         formatter: (params) => {
           const arr = params as unknown as Array<{ axisValue: string; dataIndex: number }>;
           const p = sla[arr[0].dataIndex];
-          return `${arr[0].axisValue}<br/>Ср. ответ: <b>${humanizeSeconds(p.avgSeconds)}</b><br/>Ответов: ${p.responses}`;
+          return (
+            `${arr[0].axisValue}<br/>` +
+            `Медиана (p50): <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
+            `p90: <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
+            `Среднее: ${humanizeSeconds(p.avgSeconds)}<br/>` +
+            `Ответов: ${p.responses}`
+          );
         },
       },
-      grid: { left: 56, right: 24, top: 24, bottom: 64 },
+      legend: { data: ["Медиана (p50)", "p90", "Среднее"], top: 0 },
+      grid: { left: 56, right: 24, top: 40, bottom: 64 },
       dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
       xAxis: { type: "category", data: labels, boundaryGap: false, axisLabel: { hideOverlap: true } },
       yAxis: {
@@ -163,11 +170,27 @@ export default function MetricsPage() {
       },
       series: [
         {
-          name: "Время первого ответа",
+          name: "Медиана (p50)",
           type: "line",
           smooth: true,
           showSymbol: false,
-          areaStyle: { opacity: 0.1 },
+          itemStyle: { color: "#21b573" },
+          data: sla.map((p) => +(p.p50Seconds / 60).toFixed(1)),
+        },
+        {
+          name: "p90",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#ff7a45" },
+          data: sla.map((p) => +(p.p90Seconds / 60).toFixed(1)),
+        },
+        {
+          name: "Среднее",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed" },
           itemStyle: { color: "#9254de" },
           data: sla.map((p) => +(p.avgSeconds / 60).toFixed(1)),
         },

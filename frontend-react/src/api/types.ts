@@ -47,6 +47,8 @@ export interface SlaPoint {
   bucket: string; // ISO date
   responses: number;
   avgSeconds: number;
+  p50Seconds: number;
+  p90Seconds: number;
 }
 
 export interface CategoryCount {
