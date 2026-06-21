@@ -296,7 +296,7 @@ export default function MetricsPage() {
       </Card>
 
       <Card
-        title="Время первого ответа оператора"
+        title="Время первого ответа инженера"
         extra={
           overallFrt != null ? (
             <span>

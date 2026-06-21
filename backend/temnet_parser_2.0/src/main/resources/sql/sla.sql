@@ -24,7 +24,7 @@ FROM (
     FROM (
         SELECT
             created_at,
-            TIMESTAMPDIFF(SECOND, created_at, next_out) AS frt_seconds
+            business_seconds(created_at, next_out) AS frt_seconds
         FROM (
             SELECT
                 created_at,
@@ -52,7 +52,7 @@ FROM (
         ) AS marked
         WHERE direction = 'in'
           AND (prev_created IS NULL
-               OR TIMESTAMPDIFF(SECOND, prev_created, created_at) > :sessionGapSeconds)
+               OR business_seconds(prev_created, created_at) > :sessionGapSeconds)
           AND next_out IS NOT NULL
     ) AS frt
     WHERE frt_seconds <= :maxFrtSeconds

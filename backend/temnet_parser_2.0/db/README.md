@@ -3,6 +3,12 @@
 Тестовая схема ejabberd (`archive`, `sr_group`, `sr_user`) + сид-данные,
 которыми проверяется корректность отчётных запросов.
 
+> **Важно:** метрики времени (SLA, задержка операторов, границы заявок)
+> используют SQL-функцию **`business_seconds`** (рабочее время Пн–Пт 08:00–18:00)
+> из [`functions.sql`](functions.sql). Её нужно **загрузить в БД один раз**,
+> иначе `/metrics/sla`, `/metrics/operators`, `/metrics/categories` упадут с
+> ошибкой «FUNCTION does not exist». Команды загрузки — ниже.
+
 Дефолты приложения (`application.properties`): БД `ejabberd`, пользователь
 `root`, пароль `root`, `localhost:3306`. Если поставишь так — env-переменные
 не нужны.
@@ -15,9 +21,10 @@ docker run --name temnet-maria \
   -e MARIADB_DATABASE=ejabberd \
   -p 3306:3306 -d mariadb:11
 
-# залить схему и данные
+# залить схему, данные и функцию рабочего времени
 docker exec -i temnet-maria mariadb -uroot -proot < schema.sql
 docker exec -i temnet-maria mariadb -uroot -proot ejabberd < seed.sql
+docker exec -i temnet-maria mariadb -uroot -proot ejabberd < functions.sql
 ```
 
 ## Вариант B — MSI (установщик MariaDB для Windows)
@@ -28,7 +35,11 @@ docker exec -i temnet-maria mariadb -uroot -proot ejabberd < seed.sql
 ```bat
 "C:\Program Files\MariaDB 11.x\bin\mariadb.exe" -uroot -proot < schema.sql
 "C:\Program Files\MariaDB 11.x\bin\mariadb.exe" -uroot -proot ejabberd < seed.sql
+"C:\Program Files\MariaDB 11.x\bin\mariadb.exe" -uroot -proot ejabberd < functions.sql
 ```
+
+На реальной (боевой) БД достаточно загрузить только `functions.sql` — схема и
+данные там уже есть.
 
 ## Запуск backend
 

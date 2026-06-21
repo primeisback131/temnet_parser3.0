@@ -22,7 +22,7 @@ FROM (
                 user_key,
                 direction,
                 CASE WHEN LAG(created_at) OVER w IS NULL
-                       OR TIMESTAMPDIFF(SECOND, LAG(created_at) OVER w, created_at) > :sessionGapSeconds
+                       OR business_seconds(LAG(created_at) OVER w, created_at) > :sessionGapSeconds
                      THEN 1 ELSE 0 END AS is_start
             FROM (
                 SELECT

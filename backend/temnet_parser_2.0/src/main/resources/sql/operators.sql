@@ -29,7 +29,7 @@ FROM (
             is_closed,
             is_rejected,
             LAG(is_op) OVER w AS prev_is_op,
-            TIMESTAMPDIFF(SECOND, LAG(created_at) OVER w, created_at) AS gap_seconds
+            business_seconds(LAG(created_at) OVER w, created_at) AS gap_seconds
         FROM (
             SELECT
                 created_at,

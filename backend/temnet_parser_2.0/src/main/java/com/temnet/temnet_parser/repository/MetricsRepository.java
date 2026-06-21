@@ -24,12 +24,13 @@ public class MetricsRepository {
     private static final String CATEGORIES_SQL = SqlLoader.load("sql/categories.sql");
     private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
 
-    // Replies later than this are treated as overnight/cross-session, not a
-    // first response, and excluded from the average (8 hours).
+    // Outlier guard for response time, in WORKING seconds (business_seconds):
+    // replies taking more than ~one working day are dropped (8 business hours).
     private static final int MAX_FRT_SECONDS = 8 * 3600;
 
-    // A pause longer than this in a conversation starts a new request/session
-    // for categorization (15 minutes — calibrated against closed-ticket counts).
+    // A pause longer than this (in WORKING seconds) starts a new request/session
+    // — 15 working minutes. Using business time merges conversations that span a
+    // night or weekend into one ticket.
     private static final int SESSION_GAP_SECONDS = 15 * 60;
 
     private final JdbcClient jdbcClient;
