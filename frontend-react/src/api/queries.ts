@@ -66,18 +66,6 @@ export function useCategories(start: string, end: string, groupName: string | nu
   });
 }
 
-export function useResolution(
-  start: string,
-  end: string,
-  bucket: Bucket,
-  groupName: string | null,
-) {
-  return useQuery({
-    queryKey: ["resolution", start, end, bucket, groupName],
-    queryFn: () => api.getResolution(start, end, bucket, groupName ?? undefined),
-  });
-}
-
 export function useOperators(start: string, end: string, groupName: string | null) {
   return useQuery({
     queryKey: ["operators", start, end, groupName],

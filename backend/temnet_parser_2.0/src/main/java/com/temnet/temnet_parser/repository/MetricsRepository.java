@@ -5,7 +5,6 @@ import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
-import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.support.CategoryRules;
 import com.temnet.temnet_parser.support.SqlLoader;
@@ -24,15 +23,10 @@ public class MetricsRepository {
     private static final String SLA_SQL = SqlLoader.load("sql/sla.sql");
     private static final String CATEGORIES_SQL = SqlLoader.load("sql/categories.sql");
     private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
-    private static final String RESOLUTION_SQL = SqlLoader.load("sql/resolution.sql");
 
     // Outlier guard for response time, in WORKING seconds (business_seconds):
     // replies taking more than ~one working day are dropped (8 business hours).
     private static final int MAX_FRT_SECONDS = 8 * 3600;
-
-    // Outlier guard for resolution time: tickets resolved in more than 5 working
-    // days (5 × 10 business hours) are dropped as mis-pairings / stale closes.
-    private static final int MAX_RESOLUTION_SECONDS = 5 * 10 * 3600;
 
     // A pause longer than this (in WORKING seconds) starts a new request/session
     // — 15 working minutes. Using business time merges conversations that span a
@@ -176,36 +170,6 @@ public class MetricsRepository {
         }
 
         return spec.query(new DataClassRowMapper<>(OperatorStat.class)).list();
-    }
-
-    /** Ticket resolution time (open client message → closure) per time bucket. */
-    public List<ResolutionPoint> resolution(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
-        boolean hasGroup = groupName != null && !groupName.isBlank();
-
-        String filter = hasGroup
-                ? """
-                  AND EXISTS (SELECT 1 FROM sr_user su
-                              WHERE SUBSTRING_INDEX(su.jid, '@', 1) =
-                                    CASE WHEN username LIKE 'help%'
-                                         THEN SUBSTRING_INDEX(bare_peer, '@', 1)
-                                         ELSE username END
-                                AND su.grp = :groupName)
-                  """
-                : "";
-
-        String sql = RESOLUTION_SQL
-                .replace("${bucket}", bucket.expression("close_time"))
-                .replace("${groupFilter}", filter);
-
-        var spec = jdbcClient.sql(sql)
-                .param("start", start)
-                .param("endExclusive", end.plusDays(1))
-                .param("maxResolutionSeconds", MAX_RESOLUTION_SECONDS);
-        if (hasGroup) {
-            spec = spec.param("groupName", groupName);
-        }
-
-        return spec.query(new DataClassRowMapper<>(ResolutionPoint.class)).list();
     }
 
     private static String groupFilter(boolean hasGroup) {

@@ -7,7 +7,6 @@ import type {
   HeatmapCell,
   MetricPoint,
   OperatorStat,
-  ResolutionPoint,
   SlaPoint,
   UserStat,
 } from "./types";
@@ -67,14 +66,6 @@ export const api = {
     getJson<CategoryCount[]>("/metrics/categories", {
       start,
       end,
-      ...(groupName ? { groupName } : {}),
-    }),
-
-  getResolution: (start: string, end: string, bucket: Bucket, groupName?: string) =>
-    getJson<ResolutionPoint[]>("/metrics/resolution", {
-      start,
-      end,
-      bucket,
       ...(groupName ? { groupName } : {}),
     }),
 

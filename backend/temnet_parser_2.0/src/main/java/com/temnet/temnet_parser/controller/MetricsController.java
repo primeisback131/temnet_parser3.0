@@ -5,7 +5,6 @@ import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
-import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.service.MetricsService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -69,14 +68,5 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
         return metricsService.operators(start, end, groupName);
-    }
-
-    @GetMapping("/resolution")
-    public List<ResolutionPoint> resolution(
-            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
-            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam(required = false) String groupName,
-            @RequestParam(defaultValue = "day") String bucket) {
-        return metricsService.resolution(start, end, groupName, Bucket.from(bucket));
     }
 }
