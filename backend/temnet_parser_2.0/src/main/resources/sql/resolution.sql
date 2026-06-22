@@ -1,14 +1,17 @@
 -- Ticket resolution time — from a ticket's opening client message to its
 -- closure, in business hours, bucketed by closing date.
 --
--- A ticket is delimited by CLOSURES, not by short pauses: a closure (operator
--- message "закрыта/отклонена заявка") ends a ticket, and the messages after it
--- belong to the next one. So `seg` = number of closures strictly before a row,
--- which is constant within a segment; each segment ends at exactly one closure.
--- The ticket's open = first client message in the segment; its close = that
--- closure. Robust to MAM double-storage (dedup + author by `peer`-resource).
--- Resolutions slower than :maxResolutionSeconds (5 working days) are dropped as
--- mis-pairings / stale closes.
+-- A ticket is delimited by TERMINAL statuses, not by short pauses: an operator
+-- status message ends a ticket (закрыта / отклонена / отложена), and messages
+-- after it belong to the next ticket. So `seg` = number of terminal statuses
+-- strictly before a row, constant within a segment; each segment ends at one
+-- terminal status. The ticket's open = first client message in the segment.
+--
+-- "Отложена" (postponed) is a terminal boundary but NOT a resolution, so only
+-- segments ending in закрыта/отклонена are kept here (resolution time of really
+-- resolved tickets). Robust to MAM double-storage (dedup + author by
+-- `peer`-resource). Resolutions slower than :maxResolutionSeconds (5 working
+-- days) are dropped as mis-pairings / stale closes.
 SELECT DISTINCT
     bucket,
     COUNT(*)         OVER (PARTITION BY bucket) AS resolved,
@@ -28,24 +31,31 @@ FROM (
                 client,
                 seg,
                 MIN(CASE WHEN direction = 'in' THEN created_at END) AS open_time,
-                MAX(CASE WHEN is_close THEN created_at END)         AS close_time
+                MAX(CASE WHEN is_terminal = 1 THEN created_at END)  AS close_time,
+                MAX(CASE WHEN is_terminal = 1 THEN is_resolved END) AS resolved
             FROM (
                 SELECT
                     client,
                     created_at,
                     direction,
-                    is_close,
-                    SUM(is_close) OVER (PARTITION BY client ORDER BY created_at
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS seg
+                    is_terminal,
+                    is_resolved,
+                    SUM(is_terminal) OVER (PARTITION BY client ORDER BY created_at
+                                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS seg
                 FROM (
                     SELECT
                         client,
                         created_at,
                         direction,
                         CASE WHEN direction = 'out' AND (
-                                 LOWER(txt) LIKE '%закрыта заявка%' OR LOWER(txt) LIKE '%заявка закрыта%'
+                                 LOWER(txt) LIKE '%закрыта заявка%'  OR LOWER(txt) LIKE '%заявка закрыта%'
                               OR LOWER(txt) LIKE '%отклонена заявка%' OR LOWER(txt) LIKE '%заявка отклонена%'
-                             ) THEN 1 ELSE 0 END AS is_close
+                              OR LOWER(txt) LIKE '%отложена заявка%'  OR LOWER(txt) LIKE '%заявка отложена%'
+                             ) THEN 1 ELSE 0 END AS is_terminal,
+                        CASE WHEN direction = 'out' AND (
+                                 LOWER(txt) LIKE '%закрыта заявка%'  OR LOWER(txt) LIKE '%заявка закрыта%'
+                              OR LOWER(txt) LIKE '%отклонена заявка%' OR LOWER(txt) LIKE '%заявка отклонена%'
+                             ) THEN 1 ELSE 0 END AS is_resolved
                     FROM (
                         SELECT DISTINCT
                             CASE WHEN username LIKE 'help%' THEN SUBSTRING_INDEX(bare_peer, '@', 1) ELSE username END AS client,
@@ -66,6 +76,7 @@ FROM (
             HAVING close_time IS NOT NULL
                AND open_time IS NOT NULL
                AND open_time <= close_time
+               AND resolved = 1
         ) AS tickets
         WHERE business_seconds(open_time, close_time) <= :maxResolutionSeconds
     ) AS capped
