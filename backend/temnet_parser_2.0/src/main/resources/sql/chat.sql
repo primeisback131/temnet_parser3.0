@@ -17,7 +17,7 @@ FROM (
              ((username LIKE CONCAT('%', :username, '%') AND peer LIKE 'help%')
                  OR (username LIKE 'help%' AND peer LIKE CONCAT('%', :username, '%')))
            AND created_at BETWEEN :start AND :end
-           AND txt != ' '
+           AND TRIM(txt) <> ''
      ) AS subquery
 WHERE rn = 1
 GROUP BY created_at

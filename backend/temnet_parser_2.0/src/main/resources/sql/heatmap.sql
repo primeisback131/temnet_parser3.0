@@ -11,7 +11,7 @@ FROM
 WHERE
     archive.created_at >= :start
   AND archive.created_at < :endExclusive
-  AND archive.txt IS NOT NULL
+  AND TRIM(archive.txt) <> ''
   AND sr_group.name NOT LIKE 'help%'
   AND sr_group.name != 'all'
   ${groupFilter}

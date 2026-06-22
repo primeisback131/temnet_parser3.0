@@ -12,7 +12,7 @@ FROM
     archive ON SUBSTRING_INDEX(sr_user.jid, '@', 1) = archive.username
 WHERE
     archive.created_at BETWEEN :start AND :end
-  AND archive.txt IS NOT NULL
+  AND TRIM(archive.txt) <> ''
   AND sr_group.name = :groupName
 GROUP BY
     sr_user.jid

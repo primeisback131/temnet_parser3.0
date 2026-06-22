@@ -19,7 +19,7 @@ FROM
      GROUP BY sr_group.name) AS total_users ON total_users.name = sr_group.name
 WHERE
     archive.created_at BETWEEN :start AND :end
-  AND archive.txt IS NOT NULL
+  AND TRIM(archive.txt) <> ''
   AND sr_group.name NOT LIKE 'help%'
 GROUP BY
     sr_group.name

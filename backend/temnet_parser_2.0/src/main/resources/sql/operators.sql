@@ -47,8 +47,7 @@ FROM (
                 FROM archive
                 WHERE created_at >= :start
                   AND created_at < :endExclusive
-                  AND txt IS NOT NULL
-                  AND txt != ' '
+                  AND TRIM(txt) <> ''
                   AND (username LIKE 'help%' OR peer LIKE 'help%')
                   ${groupFilter}
             ) AS dedup
