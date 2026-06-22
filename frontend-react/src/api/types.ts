@@ -56,6 +56,14 @@ export interface CategoryCount {
   requests: number;
 }
 
+export interface ResolutionPoint {
+  bucket: string; // ISO date (close date bucket)
+  resolved: number;
+  avgSeconds: number;
+  p50Seconds: number;
+  p90Seconds: number;
+}
+
 export interface OperatorStat {
   operator: string;
   messages: number;

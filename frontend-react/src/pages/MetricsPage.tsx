@@ -2,7 +2,14 @@ import { Card, Col, DatePicker, Row, Segmented, Select, Space, Statistic } from 
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
-import { useCategories, useGroups, useHeatmap, useSla, useTimeseries } from "../api/queries";
+import {
+  useCategories,
+  useGroups,
+  useHeatmap,
+  useResolution,
+  useSla,
+  useTimeseries,
+} from "../api/queries";
 import type { Bucket } from "../api/types";
 import EChart from "../components/EChart";
 import { defaultRange, toApiDate } from "../lib/date";
@@ -31,6 +38,16 @@ export default function MetricsPage() {
   const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
   const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
   const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
+  const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
+
+  // Overall resolution time, weighted by resolved tickets per bucket.
+  const overallResolution = useMemo(() => {
+    const total = resolution.reduce((n, p) => n + p.resolved, 0);
+    if (total === 0) return null;
+    const mean = resolution.reduce((n, p) => n + p.avgSeconds * p.resolved, 0) / total;
+    const median = resolution.reduce((n, p) => n + p.p50Seconds * p.resolved, 0) / total;
+    return { mean, median, total };
+  }, [resolution]);
 
   const categoryStats = useMemo(() => {
     const named = categories.filter((c) => c.category !== "Другое");
@@ -201,6 +218,59 @@ export default function MetricsPage() {
     };
   }, [sla, labelFormat]);
 
+  const resolutionOption = useMemo<EChartsOption>(() => {
+    const labels = resolution.map((p) => dayjs(p.bucket).format(labelFormat));
+    const toHours = (s: number) => +(s / 3600).toFixed(2);
+    return {
+      tooltip: {
+        trigger: "axis",
+        formatter: (params) => {
+          const arr = params as unknown as Array<{ axisValue: string; dataIndex: number }>;
+          const p = resolution[arr[0].dataIndex];
+          return (
+            `${arr[0].axisValue}<br/>` +
+            `Медиана (p50): <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
+            `p90: <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
+            `Среднее: ${humanizeSeconds(p.avgSeconds)}<br/>` +
+            `Решено: ${p.resolved}`
+          );
+        },
+      },
+      legend: { data: ["Медиана (p50)", "p90", "Среднее"], top: 0 },
+      grid: { left: 56, right: 24, top: 40, bottom: 64 },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      xAxis: { type: "category", data: labels, boundaryGap: false, axisLabel: { hideOverlap: true } },
+      yAxis: { type: "value", name: "ч", axisLabel: { formatter: (v: number) => String(v) } },
+      series: [
+        {
+          name: "Медиана (p50)",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#21b573" },
+          data: resolution.map((p) => toHours(p.p50Seconds)),
+        },
+        {
+          name: "p90",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#ff7a45" },
+          data: resolution.map((p) => toHours(p.p90Seconds)),
+        },
+        {
+          name: "Среднее",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed" },
+          itemStyle: { color: "#9254de" },
+          data: resolution.map((p) => toHours(p.avgSeconds)),
+        },
+      ],
+    };
+  }, [resolution, labelFormat]);
+
   // Number of times each weekday (0=Mon..6=Sun) occurs in the selected range,
   // used to turn cell sums into per-occurrence averages.
   const weekdayCounts = useMemo(() => {
@@ -310,6 +380,22 @@ export default function MetricsPage() {
         }
       >
         <EChart option={slaOption} loading={slaLoading} height={300} />
+      </Card>
+
+      <Card
+        title="Время решения заявки"
+        extra={
+          overallResolution != null ? (
+            <span>
+              Медиана: <b style={{ color: "#21b573" }}>{humanizeSeconds(overallResolution.median)}</b>
+              <span style={{ color: "#8c8c8c" }}>
+                {" "}· среднее {humanizeSeconds(overallResolution.mean)} · решено {overallResolution.total}
+              </span>
+            </span>
+          ) : null
+        }
+      >
+        <EChart option={resolutionOption} loading={resolutionLoading} height={300} />
       </Card>
 
       <Card
