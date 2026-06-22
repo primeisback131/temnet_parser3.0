@@ -1,27 +1,27 @@
 -- Ticket resolution time — from a ticket's opening client message to its
 -- closure, in business hours, bucketed by closing date.
 --
--- A ticket is delimited by TERMINAL statuses, not by short pauses: an operator
--- status message ends a ticket (закрыта / отклонена / отложена), and messages
--- after it belong to the next ticket. So `seg` = number of terminal statuses
--- strictly before a row, constant within a segment; each segment ends at one
--- terminal status. The ticket's open = first client message in the segment.
+-- A ticket runs from its opening client message to the RESOLVING closure that
+-- ends it (закрыта / отклонена). `seg` = number of resolving closures strictly
+-- before a row, constant within a segment; each segment ends at one closure.
+-- "Отложена" (postponed) is an intermediate status, NOT a boundary: a ticket
+-- postponed and later closed is one ticket whose resolution spans the pause
+-- (otherwise its closure would be orphaned and under-counted).
 --
--- "Отложена" (postponed) is a terminal boundary but NOT a resolution, so only
--- segments ending in закрыта/отклонена are kept here (resolution time of really
--- resolved tickets). Robust to MAM double-storage (dedup + author by
--- `peer`-resource). Resolutions slower than :maxResolutionSeconds (5 working
--- days) are dropped as mis-pairings / stale closes.
+-- `resolved` counts every closed/rejected ticket that has an opening message
+-- (so it matches the closure totals in companies/users). The :maxResolutionSeconds
+-- cap (5 working days) only excludes outliers from the time percentiles, not
+-- from the count. Robust to MAM double-storage (dedup + author by `peer`-resource).
 SELECT DISTINCT
     bucket,
-    COUNT(*)         OVER (PARTITION BY bucket) AS resolved,
-    AVG(res_seconds) OVER (PARTITION BY bucket) AS avg_seconds,
-    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY res_seconds) OVER (PARTITION BY bucket) AS p50_seconds,
-    PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY res_seconds) OVER (PARTITION BY bucket) AS p90_seconds
+    COUNT(*)          OVER (PARTITION BY bucket) AS resolved,
+    AVG(capped_seconds) OVER (PARTITION BY bucket) AS avg_seconds,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY capped_seconds) OVER (PARTITION BY bucket) AS p50_seconds,
+    PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY capped_seconds) OVER (PARTITION BY bucket) AS p90_seconds
 FROM (
     SELECT
-        ${bucket}   AS bucket,
-        res_seconds
+        ${bucket} AS bucket,
+        CASE WHEN res_seconds <= :maxResolutionSeconds THEN res_seconds END AS capped_seconds
     FROM (
         SELECT
             close_time,
@@ -31,17 +31,15 @@ FROM (
                 client,
                 seg,
                 MIN(CASE WHEN direction = 'in' THEN created_at END) AS open_time,
-                MAX(CASE WHEN is_terminal = 1 THEN created_at END)  AS close_time,
-                MAX(CASE WHEN is_terminal = 1 THEN is_resolved END) AS resolved
+                MAX(CASE WHEN is_close THEN created_at END)         AS close_time
             FROM (
                 SELECT
                     client,
                     created_at,
                     direction,
-                    is_terminal,
-                    is_resolved,
-                    SUM(is_terminal) OVER (PARTITION BY client ORDER BY created_at
-                                           ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS seg
+                    is_close,
+                    SUM(is_close) OVER (PARTITION BY client ORDER BY created_at
+                                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS seg
                 FROM (
                     SELECT
                         client,
@@ -50,12 +48,7 @@ FROM (
                         CASE WHEN direction = 'out' AND (
                                  LOWER(txt) LIKE '%закрыта заявка%'  OR LOWER(txt) LIKE '%заявка закрыта%'
                               OR LOWER(txt) LIKE '%отклонена заявка%' OR LOWER(txt) LIKE '%заявка отклонена%'
-                              OR LOWER(txt) LIKE '%отложена заявка%'  OR LOWER(txt) LIKE '%заявка отложена%'
-                             ) THEN 1 ELSE 0 END AS is_terminal,
-                        CASE WHEN direction = 'out' AND (
-                                 LOWER(txt) LIKE '%закрыта заявка%'  OR LOWER(txt) LIKE '%заявка закрыта%'
-                              OR LOWER(txt) LIKE '%отклонена заявка%' OR LOWER(txt) LIKE '%заявка отклонена%'
-                             ) THEN 1 ELSE 0 END AS is_resolved
+                             ) THEN 1 ELSE 0 END AS is_close
                     FROM (
                         SELECT DISTINCT
                             CASE WHEN username LIKE 'help%' THEN SUBSTRING_INDEX(bare_peer, '@', 1) ELSE username END AS client,
@@ -76,9 +69,7 @@ FROM (
             HAVING close_time IS NOT NULL
                AND open_time IS NOT NULL
                AND open_time <= close_time
-               AND resolved = 1
         ) AS tickets
-        WHERE business_seconds(open_time, close_time) <= :maxResolutionSeconds
-    ) AS capped
+    ) AS resolved_tickets
 ) AS base
 ORDER BY bucket
