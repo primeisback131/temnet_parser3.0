@@ -37,6 +37,32 @@ public final class CategoryRules {
     private CategoryRules() {
     }
 
+    /** Rank of the fallback "other" bucket (all real categories rank lower). */
+    public static int otherRank() {
+        return CATEGORIES.size() + 1;
+    }
+
+    /**
+     * Java-side twin of {@link #rankExpression}: priority rank of the first
+     * category whose keyword occurs in the text, or {@link #otherRank()}.
+     */
+    public static int rankOf(String text) {
+        String lower = text.toLowerCase();
+        for (int i = 0; i < CATEGORIES.size(); i++) {
+            for (String keyword : CATEGORIES.get(i).keywords()) {
+                if (lower.contains(keyword)) {
+                    return i + 1;
+                }
+            }
+        }
+        return otherRank();
+    }
+
+    /** Category name for a rank produced by {@link #rankOf}. */
+    public static String nameOf(int rank) {
+        return rank >= 1 && rank <= CATEGORIES.size() ? CATEGORIES.get(rank - 1).name() : OTHER;
+    }
+
     /**
      * Builds a {@code CASE} that maps a text column to a priority rank
      * (1 = highest-priority category .. N, with N+1 for the "other" bucket).
