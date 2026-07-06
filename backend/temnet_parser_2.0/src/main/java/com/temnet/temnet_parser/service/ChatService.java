@@ -18,13 +18,13 @@ public class ChatService {
         this.chatRepository = chatRepository;
     }
 
-    public List<ChatMessage> history(LocalDate start, LocalDate end, String username) {
-        return chatRepository.findHistory(start, end, username);
+    public List<ChatMessage> history(LocalDate start, LocalDate end, String groupName) {
+        return chatRepository.findHistory(start, end, groupName);
     }
 
     /** Distinct senders in the group's history, excluding the support ("help") side. */
-    public Set<String> participants(LocalDate start, LocalDate end, String username) {
-        return history(start, end, username).stream()
+    public Set<String> participants(LocalDate start, LocalDate end, String groupName) {
+        return history(start, end, groupName).stream()
                 .map(ChatMessage::sender)
                 .filter(sender -> !sender.contains("help"))
                 .collect(Collectors.toUnmodifiableSet());

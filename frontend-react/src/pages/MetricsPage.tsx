@@ -40,9 +40,11 @@ export default function MetricsPage() {
     return { named, other, classifiedPct };
   }, [categories]);
 
-  // Overall first-response time, weighted by responses per bucket. The median
-  // is the representative "typical" SLA (stable, robust to the long tail); the
-  // mean is shown secondarily because it is inflated by slow cross-day replies.
+  // Overall first-response time. Both values are weighted by responses per
+  // bucket; the "median" is therefore a weighted average of per-bucket p50s
+  // (a stable "typical SLA" proxy), not a true overall median — the label
+  // says so. The mean is shown secondarily because it is inflated by slow
+  // cross-day replies.
   const overallFrt = useMemo(() => {
     const totalResponses = sla.reduce((n, p) => n + p.responses, 0);
     if (totalResponses === 0) return null;
@@ -302,8 +304,8 @@ export default function MetricsPage() {
         title="Время первого ответа инженера"
         extra={
           overallFrt != null ? (
-            <span>
-              Медиана: <b style={{ color: "#21b573" }}>{humanizeSeconds(overallFrt.median)}</b>
+            <span title="Средневзвешенная медиан по интервалам графика (не общая медиана периода)">
+              Медиана (взвеш.): <b style={{ color: "#21b573" }}>{humanizeSeconds(overallFrt.median)}</b>
               <span style={{ color: "#8c8c8c" }}> · среднее {humanizeSeconds(overallFrt.mean)}</span>
             </span>
           ) : null

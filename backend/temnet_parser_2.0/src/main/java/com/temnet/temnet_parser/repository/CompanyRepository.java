@@ -21,9 +21,10 @@ public class CompanyRepository {
     }
 
     public List<Company> findReport(LocalDate start, LocalDate end) {
+        // The end date is inclusive: half-open [start, end+1day) interval.
         return jdbcClient.sql(SQL)
                 .param("start", start)
-                .param("end", end)
+                .param("endExclusive", end.plusDays(1))
                 .query(new DataClassRowMapper<>(Company.class))
                 .list();
     }

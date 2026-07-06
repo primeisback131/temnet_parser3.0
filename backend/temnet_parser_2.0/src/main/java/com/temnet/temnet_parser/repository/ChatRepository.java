@@ -20,11 +20,12 @@ public class ChatRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, String username) {
+    /** Chat history of the given group's clients; the end date is inclusive. */
+    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, String groupName) {
         return jdbcClient.sql(SQL)
-                .param("username", username)
+                .param("groupName", groupName)
                 .param("start", start)
-                .param("end", end)
+                .param("endExclusive", end.plusDays(1))
                 .query(new DataClassRowMapper<>(ChatMessage.class))
                 .list();
     }

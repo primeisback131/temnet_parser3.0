@@ -5,14 +5,13 @@ SELECT
     SUM(IF(LOWER(archive.txt) LIKE '%заявка в работе%' OR LOWER(archive.txt) LIKE '%в работе заявка%', 1, 0))   AS requests_in_progress,
     COUNT(*)                                                                                                    AS total_messages
 FROM
-    sr_group
-        LEFT JOIN
-    sr_user ON sr_group.name = sr_user.grp
-        LEFT JOIN
+    sr_user
+        JOIN
     archive ON SUBSTRING_INDEX(sr_user.jid, '@', 1) = archive.username
 WHERE
-    archive.created_at BETWEEN :start AND :end
+    archive.created_at >= :start
+  AND archive.created_at < :endExclusive
   AND TRIM(archive.txt) <> ''
-  AND sr_group.name = :groupName
+  AND sr_user.grp = :groupName
 GROUP BY
     sr_user.jid

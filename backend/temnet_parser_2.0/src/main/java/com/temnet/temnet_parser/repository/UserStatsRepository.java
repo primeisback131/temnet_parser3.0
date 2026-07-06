@@ -21,9 +21,10 @@ public class UserStatsRepository {
     }
 
     public List<UserStat> findReport(LocalDate start, LocalDate end, String groupName) {
+        // The end date is inclusive: half-open [start, end+1day) interval.
         return jdbcClient.sql(SQL)
                 .param("start", start)
-                .param("end", end)
+                .param("endExclusive", end.plusDays(1))
                 .param("groupName", groupName)
                 .query(new DataClassRowMapper<>(UserStat.class))
                 .list();

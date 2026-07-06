@@ -24,13 +24,17 @@ CREATE TABLE sr_user (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Message archive (MAM). Only the columns the app reads are modelled.
+-- `peer` may carry a /resource suffix (the recipient's copy of a message);
+-- `bare_peer` is always the bare jid.
 CREATE TABLE archive (
     id         BIGINT NOT NULL AUTO_INCREMENT,
     username   VARCHAR(191) NOT NULL,
     peer       VARCHAR(191) NOT NULL,
+    bare_peer  VARCHAR(191) NOT NULL,
     txt        TEXT,
     created_at DATETIME NOT NULL,
     PRIMARY KEY (id),
     KEY idx_archive_username (username),
+    KEY idx_archive_bare_peer (bare_peer),
     KEY idx_archive_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

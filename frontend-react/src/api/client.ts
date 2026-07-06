@@ -36,8 +36,8 @@ export const api = {
   getUsers: (start: string, end: string, groupName: string) =>
     getJson<UserStat[]>("/users", { start, end, groupName }),
 
-  getChats: (start: string, end: string, username: string) =>
-    getJson<ChatMessage[]>("/chat", { start, end, username }),
+  getChats: (start: string, end: string, groupName: string) =>
+    getJson<ChatMessage[]>("/chat", { start, end, groupName }),
 
   getTimeseries: (start: string, end: string, bucket: Bucket, groupName?: string) =>
     getJson<MetricPoint[]>("/metrics/timeseries", {

@@ -29,15 +29,15 @@ public class ChatController {
     public List<ChatMessage> getHistory(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam String username) {
-        return chatService.history(start, end, username);
+            @RequestParam String groupName) {
+        return chatService.history(start, end, groupName);
     }
 
     @GetMapping("/chatlist")
     public Map<String, Set<String>> getParticipants(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam String username) {
-        return Map.of("results", chatService.participants(start, end, username));
+            @RequestParam String groupName) {
+        return Map.of("results", chatService.participants(start, end, groupName));
     }
 }

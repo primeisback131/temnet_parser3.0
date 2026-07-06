@@ -25,8 +25,9 @@ public class MetricsRepository {
     private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
 
     // Outlier guard for response time, in WORKING seconds (business_seconds):
-    // replies taking more than ~one working day are dropped (8 business hours).
-    private static final int MAX_FRT_SECONDS = 8 * 3600;
+    // replies taking more than one working day are dropped. Must match the
+    // 10-hour business day (08:00-18:00) defined in db/functions.sql.
+    private static final int MAX_FRT_SECONDS = 10 * 3600;
 
     // A pause longer than this (in WORKING seconds) starts a new request/session
     // — 15 working minutes. Using business time merges conversations that span a
@@ -173,6 +174,7 @@ public class MetricsRepository {
     }
 
     private static String groupFilter(boolean hasGroup) {
-        return hasGroup ? "AND sr_group.name = :groupName" : "";
+        // Spliced into the EXISTS (sr_user su ...) membership check.
+        return hasGroup ? "AND su.grp = :groupName" : "";
     }
 }
