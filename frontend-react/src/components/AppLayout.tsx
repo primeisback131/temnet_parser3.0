@@ -3,10 +3,13 @@ import {
   CustomerServiceOutlined,
   LineChartOutlined,
   MessageOutlined,
+  MoonOutlined,
+  SunOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { Layout, Menu } from "antd";
+import { Button, Layout, Menu, Tooltip } from "antd";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useThemeMode } from "../theme";
 
 const { Header, Sider, Content } = Layout;
 
@@ -21,6 +24,7 @@ const items = [
 export default function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { mode, toggle } = useThemeMode();
   const selected = items.find((i) => location.pathname.startsWith(i.key))?.key ?? "/chat";
 
   return (
@@ -37,7 +41,15 @@ export default function AppLayout() {
       </Sider>
       <Layout>
         <Header className="app-header">
-          {items.find((i) => i.key === selected)?.label}
+          <span>{items.find((i) => i.key === selected)?.label}</span>
+          <Tooltip title={mode === "dark" ? "Светлая тема" : "Тёмная тема"}>
+            <Button
+              type="text"
+              aria-label="Переключить тему"
+              icon={mode === "dark" ? <SunOutlined /> : <MoonOutlined />}
+              onClick={toggle}
+            />
+          </Tooltip>
         </Header>
         <Content className="app-content">
           <Outlet />
