@@ -46,8 +46,9 @@ import java.util.regex.Pattern;
  * or different one (max id below the watermark), everything is rebuilt from
  * scratch. Runs on a schedule and via POST /admin/sync.
  *
- * Per message: MAM double copies are collapsed (both copies hash to the same
- * dedup key once the true author is recovered), then a per-client state
+ * Per message: MAM double copies are collapsed by the stanza id extracted
+ * from the archived XML (both copies carry the same id; their created_at can
+ * differ by a second, so time is only a fallback key), then a per-client state
  * machine maintains tickets: a client message opens a ticket (unless it is a
  * short "thanks" right after a closure), an operator closure phrase closes
  * it, long silence expires it, and a quick return after a closure is scored
@@ -195,7 +196,7 @@ public class AnalyticsSyncService {
     /** Next batch of support-conversation messages after the watermark, normalized. */
     private List<Msg> fetchBatch(long watermark) {
         return source.sql("""
-                        SELECT id, username, peer, bare_peer, txt, created_at
+                        SELECT id, username, peer, bare_peer, txt, created_at, xml
                         FROM archive
                         WHERE id > :watermark AND txt IS NOT NULL
                         ORDER BY id
@@ -203,7 +204,7 @@ public class AnalyticsSyncService {
                         """.formatted(BATCH_SIZE))
                 .param("watermark", watermark)
                 .query((rs, i) -> normalize(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        rs.getString(5), rs.getTimestamp(6).toLocalDateTime()))
+                        rs.getString(5), rs.getTimestamp(6).toLocalDateTime(), rs.getBytes(7)))
                 .list()
                 .stream()
                 .filter(Objects::nonNull)
@@ -228,7 +229,7 @@ public class AnalyticsSyncService {
     }
 
     private Msg normalize(long id, String owner, String peer, String barePeer, String rawTxt,
-                          LocalDateTime createdAt) {
+                          LocalDateTime createdAt, byte[] xml) {
         String txt = rawTxt.strip();
         if (txt.isEmpty()) {
             return null; // MAM service row (receipt / chat marker)
@@ -245,8 +246,36 @@ public class AnalyticsSyncService {
         String recipient = author.equals(owner) ? peerLocal : owner;
         String client = ownerIsOp ? peerLocal : owner;
         boolean inbound = !author.startsWith(operatorPrefix);
+        // Both MAM copies of one stanza share its id, while their created_at
+        // can differ by a second (the copies are written milliseconds apart,
+        // sometimes across a second boundary) — so the id is the dedup key
+        // and the timestamp only a fallback for stanzas without one.
+        String stanzaId = stanzaId(xml);
         return new Msg(id, client, author, recipient, inbound, txt, createdAt,
-                dedupHash(client, author, txt, createdAt));
+                dedupHash(client, author, txt, stanzaId != null ? stanzaId : createdAt.toString()));
+    }
+
+    /**
+     * Stanza id from ejabberd's token-encoded archive XML: the id attribute is
+     * stored as bytes {@code 0x0B 0x06}, a length byte, then the id itself.
+     * Everything before it is header tokens and a printable /resource, so the
+     * first marker occurrence is the id. Returns null when not found.
+     */
+    private static String stanzaId(byte[] xml) {
+        if (xml == null) {
+            return null;
+        }
+        for (int i = 0; i + 2 < xml.length; i++) {
+            if (xml[i] == 0x0B && xml[i + 1] == 0x06) {
+                int length = xml[i + 2] & 0xFF;
+                int from = i + 3;
+                if (length == 0 || from + length > xml.length) {
+                    return null;
+                }
+                return new String(xml, from, length, StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     /**
@@ -304,14 +333,14 @@ public class AnalyticsSyncService {
         return at < 0 ? jid : jid.substring(0, at);
     }
 
-    private static byte[] dedupHash(String client, String author, String txt, LocalDateTime createdAt) {
+    private static byte[] dedupHash(String client, String author, String txt, String identity) {
         try {
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
             sha1.update(client.getBytes(StandardCharsets.UTF_8));
             sha1.update((byte) 0);
             sha1.update(author.getBytes(StandardCharsets.UTF_8));
             sha1.update((byte) 0);
-            sha1.update(createdAt.toString().getBytes(StandardCharsets.UTF_8));
+            sha1.update(identity.getBytes(StandardCharsets.UTF_8));
             sha1.update((byte) 0);
             sha1.update(txt.getBytes(StandardCharsets.UTF_8));
             return sha1.digest();
