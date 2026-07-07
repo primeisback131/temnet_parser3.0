@@ -26,7 +26,9 @@ import java.util.Map;
  * ANTHROPIC_API_KEY). Verdicts are cached in `llm_verdict` by the ticket's
  * natural identity (client + opened_at), so full rebuilds never re-classify
  * — and re-pay for — already-decided cases. At most
- * {@code app.llm.max-per-sync} API calls per sync run.
+ * {@code app.llm.max-per-sync} API calls per sync run, paced to
+ * {@code app.llm.requests-per-minute} (default 5, the Anthropic free-tier
+ * limit) so a sync run never trips the rate limiter.
  */
 @Service
 public class LlmReopenClassifier {
@@ -47,16 +49,21 @@ public class LlmReopenClassifier {
     private final JdbcTemplate analytics;
     private final String model;
     private final int maxPerSync;
+    /** Minimum spacing between API calls; 0 disables pacing. */
+    private final long minCallIntervalMillis;
+    private long earliestNextCallAt = 0;
     private final AnthropicClient client; // null when no API key is configured
 
     public LlmReopenClassifier(
             @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics,
             @Value("${app.llm.api-key:}") String apiKey,
             @Value("${app.llm.model:claude-haiku-4-5}") String model,
-            @Value("${app.llm.max-per-sync:500}") int maxPerSync) {
+            @Value("${app.llm.max-per-sync:20}") int maxPerSync,
+            @Value("${app.llm.requests-per-minute:5}") int requestsPerMinute) {
         this.analytics = analytics;
         this.model = model;
         this.maxPerSync = maxPerSync;
+        this.minCallIntervalMillis = requestsPerMinute > 0 ? 60_000L / requestsPerMinute : 0;
         this.client = apiKey == null || apiKey.isBlank()
                 ? null
                 : AnthropicOkHttpClient.builder().apiKey(apiKey).build();
@@ -132,10 +139,30 @@ public class LlmReopenClassifier {
         return found.isEmpty() ? null : found.get(0);
     }
 
+    /**
+     * Blocks until the next API call fits the configured requests-per-minute
+     * budget (free tier: 5/min). Token limits (10K in / 4K out per minute)
+     * are never the binding constraint here: each request is well under 2K
+     * input tokens and 10 output tokens.
+     */
+    private void awaitRateLimit() {
+        long wait = earliestNextCallAt - System.currentTimeMillis();
+        if (wait > 0) {
+            try {
+                Thread.sleep(wait);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while pacing LLM calls", e);
+            }
+        }
+        earliestNextCallAt = System.currentTimeMillis() + minCallIntervalMillis;
+    }
+
     private String classify(Candidate candidate) {
         String previousTexts = inboundTexts(candidate.client(), candidate.prevOpened(), candidate.prevClosed());
         String newTexts = inboundTexts(candidate.client(), candidate.openedAt(), null);
 
+        awaitRateLimit();
         Message response = client.messages().create(MessageCreateParams.builder()
                 .model(model)
                 .maxTokens(10L)
