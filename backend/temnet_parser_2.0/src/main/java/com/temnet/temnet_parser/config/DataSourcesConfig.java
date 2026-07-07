@@ -54,6 +54,11 @@ public class DataSourcesConfig {
     }
 
     @Bean
+    public JdbcClient analyticsJdbcClient(@Qualifier("analyticsDataSource") DataSource dataSource) {
+        return JdbcClient.create(dataSource);
+    }
+
+    @Bean
     public JdbcTransactionManager analyticsTxManager(@Qualifier("analyticsDataSource") DataSource dataSource) {
         return new JdbcTransactionManager(dataSource);
     }

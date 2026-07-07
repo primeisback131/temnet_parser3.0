@@ -1,10 +1,12 @@
 package com.temnet.temnet_parser.service;
 
+import com.temnet.temnet_parser.dto.Backlog;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.repository.MetricsRepository;
 import org.springframework.cache.annotation.Cacheable;
@@ -49,6 +51,19 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.sla(start, end, groupName, bucket);
+    }
+
+    @Cacheable("resolution")
+    public List<ResolutionPoint> resolution(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.resolution(start, end, groupName, bucket);
+    }
+
+    @Cacheable("backlog")
+    public Backlog backlog(String groupName) {
+        return metricsRepository.backlog(groupName);
     }
 
     @Cacheable("categories")

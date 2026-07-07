@@ -59,6 +59,25 @@ export function useSla(start: string, end: string, bucket: Bucket, groupName: st
   });
 }
 
+export function useResolution(
+  start: string,
+  end: string,
+  bucket: Bucket,
+  groupName: string | null,
+) {
+  return useQuery({
+    queryKey: ["resolution", start, end, bucket, groupName],
+    queryFn: () => api.getResolution(start, end, bucket, groupName ?? undefined),
+  });
+}
+
+export function useBacklog(groupName: string | null) {
+  return useQuery({
+    queryKey: ["backlog", groupName],
+    queryFn: () => api.getBacklog(groupName ?? undefined),
+  });
+}
+
 export function useCategories(start: string, end: string, groupName: string | null) {
   return useQuery({
     queryKey: ["categories", start, end, groupName],

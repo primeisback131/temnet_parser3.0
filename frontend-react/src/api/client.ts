@@ -1,4 +1,5 @@
 import type {
+  Backlog,
   Bucket,
   CategoryCount,
   ChatMessage,
@@ -7,6 +8,7 @@ import type {
   HeatmapCell,
   MetricPoint,
   OperatorStat,
+  ResolutionPoint,
   SlaPoint,
   UserStat,
 } from "./types";
@@ -61,6 +63,17 @@ export const api = {
       bucket,
       ...(groupName ? { groupName } : {}),
     }),
+
+  getResolution: (start: string, end: string, bucket: Bucket, groupName?: string) =>
+    getJson<ResolutionPoint[]>("/metrics/resolution", {
+      start,
+      end,
+      bucket,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getBacklog: (groupName?: string) =>
+    getJson<Backlog>("/metrics/backlog", groupName ? { groupName } : {}),
 
   getCategories: (start: string, end: string, groupName?: string) =>
     getJson<CategoryCount[]>("/metrics/categories", {

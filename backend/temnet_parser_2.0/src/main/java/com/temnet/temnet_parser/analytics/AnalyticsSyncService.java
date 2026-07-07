@@ -8,6 +8,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -73,17 +75,20 @@ public class AnalyticsSyncService {
     private final JdbcTemplate analytics;
     private final NamedParameterJdbcTemplate analyticsNamed;
     private final TransactionTemplate tx;
+    private final CacheManager cacheManager;
     private final String operatorPrefix;
 
     public AnalyticsSyncService(
             JdbcClient source,
             @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics,
             JdbcTransactionManager analyticsTxManager,
+            CacheManager cacheManager,
             @Value("${app.operator-prefix:help}") String operatorPrefix) {
         this.source = source;
         this.analytics = analytics;
         this.analyticsNamed = new NamedParameterJdbcTemplate(analytics);
         this.tx = new TransactionTemplate(analyticsTxManager);
+        this.cacheManager = cacheManager;
         this.operatorPrefix = operatorPrefix;
     }
 
@@ -92,7 +97,7 @@ public class AnalyticsSyncService {
     }
 
     /** A normalized message of a client <-> support conversation. */
-    private record Msg(long sourceId, String client, String author, boolean inbound, String txt,
+    private record Msg(long sourceId, String client, String author, String recipient, boolean inbound, String txt,
                        LocalDateTime createdAt, byte[] hash) {
     }
 
@@ -167,6 +172,16 @@ public class AnalyticsSyncService {
         analytics.update(
                 "UPDATE sync_state SET last_run_at = NOW(), messages_total = (SELECT COUNT(*) FROM message m) WHERE id = 1");
 
+        if (full || inserted > 0) {
+            // Metric responses are cached; new data must show up immediately.
+            for (String name : cacheManager.getCacheNames()) {
+                Cache cache = cacheManager.getCache(name);
+                if (cache != null) {
+                    cache.clear();
+                }
+            }
+        }
+
         SyncSummary summary =
                 new SyncSummary(full, scanned, inserted, watermark, System.currentTimeMillis() - startedAt);
         log.info("Sync done: {}", summary);
@@ -223,9 +238,11 @@ public class AnalyticsSyncService {
         // The recipient's copy carries the sender's full jid with a /resource;
         // the sender's copy has a bare peer.
         String author = peer.contains("/") ? local(peer) : owner;
+        String recipient = author.equals(owner) ? peerLocal : owner;
         String client = ownerIsOp ? peerLocal : owner;
         boolean inbound = !author.startsWith(operatorPrefix);
-        return new Msg(id, client, author, inbound, txt, createdAt, dedupHash(client, author, txt, createdAt));
+        return new Msg(id, client, author, recipient, inbound, txt, createdAt,
+                dedupHash(client, author, txt, createdAt));
     }
 
     /**
@@ -236,8 +253,8 @@ public class AnalyticsSyncService {
      */
     private long insertAndProcess(List<Msg> batch, TicketEngine engine) {
         analytics.batchUpdate("""
-                        INSERT IGNORE INTO message (source_id, client, author, direction, txt, created_at, dedup_hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        INSERT IGNORE INTO message (source_id, client, author, recipient, direction, txt, created_at, dedup_hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 batch,
                 batch.size(),
@@ -245,10 +262,11 @@ public class AnalyticsSyncService {
                     ps.setLong(1, m.sourceId());
                     ps.setString(2, m.client());
                     ps.setString(3, m.author());
-                    ps.setString(4, m.inbound() ? "in" : "out");
-                    ps.setString(5, m.txt());
-                    ps.setTimestamp(6, Timestamp.valueOf(m.createdAt()));
-                    ps.setBytes(7, m.hash());
+                    ps.setString(4, m.recipient());
+                    ps.setString(5, m.inbound() ? "in" : "out");
+                    ps.setString(6, m.txt());
+                    ps.setTimestamp(7, Timestamp.valueOf(m.createdAt()));
+                    ps.setBytes(8, m.hash());
                 });
 
         // Which of our source ids won the dedup race (driver batch results are
@@ -378,6 +396,8 @@ public class AnalyticsSyncService {
             st.open.lastActivity = m.createdAt();
             if (st.open.firstResponseAt == null) {
                 st.open.firstResponseAt = m.createdAt();
+                st.open.firstResponder = m.author();
+                st.open.frtSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
             }
             if (st.open.inProgressAt == null
                     && (lower.contains("заявка в работе") || lower.contains("в работе заявка"))) {
@@ -396,6 +416,7 @@ public class AnalyticsSyncService {
             st.open.status = status;
             st.open.closedAt = m.createdAt();
             st.open.closedBy = m.author();
+            st.open.resolutionSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
             dirty.add(st.open);
             st.lastClosed = st.open;
             st.open = null;
@@ -414,8 +435,9 @@ public class AnalyticsSyncService {
 
         private Ticket latest(String client, String statusFilter, String orderBy) {
             List<Ticket> found = analytics.query(
-                    "SELECT id, client, opened_at, last_activity, first_response_at, in_progress_at, closed_at,"
-                            + " closed_by, status, category_rank, messages_in, messages_out, reopened_from, reopen_score"
+                    "SELECT id, client, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
+                            + " in_progress_at, closed_at, closed_by, resolution_seconds, status, category_rank,"
+                            + " messages_in, messages_out, reopened_from, reopen_score"
                             + " FROM ticket WHERE client = ? AND " + statusFilter
                             + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
                     (rs, i) -> {
@@ -423,9 +445,14 @@ public class AnalyticsSyncService {
                         t.id = rs.getLong("id");
                         t.lastActivity = rs.getTimestamp("last_activity").toLocalDateTime();
                         t.firstResponseAt = toLocal(rs.getTimestamp("first_response_at"));
+                        t.firstResponder = rs.getString("first_responder");
+                        long frt = rs.getLong("frt_seconds");
+                        t.frtSeconds = rs.wasNull() ? null : frt;
                         t.inProgressAt = toLocal(rs.getTimestamp("in_progress_at"));
                         t.closedAt = toLocal(rs.getTimestamp("closed_at"));
                         t.closedBy = rs.getString("closed_by");
+                        long resolution = rs.getLong("resolution_seconds");
+                        t.resolutionSeconds = rs.wasNull() ? null : resolution;
                         t.status = rs.getString("status");
                         t.categoryRank = rs.getInt("category_rank");
                         t.messagesIn = rs.getInt("messages_in");
@@ -443,10 +470,11 @@ public class AnalyticsSyncService {
             GeneratedKeyHolder keys = new GeneratedKeyHolder();
             analytics.update(con -> {
                 PreparedStatement ps = con.prepareStatement("""
-                                INSERT INTO ticket (client, opened_at, last_activity, first_response_at, in_progress_at,
-                                                    closed_at, closed_by, status, category, category_rank,
-                                                    messages_in, messages_out, reopened_from, reopen_score)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO ticket (client, opened_at, last_activity, first_response_at, first_responder,
+                                                    frt_seconds, in_progress_at, closed_at, closed_by, resolution_seconds,
+                                                    status, category, category_rank, messages_in, messages_out,
+                                                    reopened_from, reopen_score)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -458,17 +486,20 @@ public class AnalyticsSyncService {
         void flushDirty() {
             for (Ticket t : dirty) {
                 analytics.update("""
-                                UPDATE ticket SET last_activity = ?, first_response_at = ?, in_progress_at = ?,
-                                                  closed_at = ?, closed_by = ?, status = ?, category = ?,
-                                                  category_rank = ?, messages_in = ?, messages_out = ?,
-                                                  reopened_from = ?, reopen_score = ?
+                                UPDATE ticket SET last_activity = ?, first_response_at = ?, first_responder = ?,
+                                                  frt_seconds = ?, in_progress_at = ?, closed_at = ?, closed_by = ?,
+                                                  resolution_seconds = ?, status = ?, category = ?, category_rank = ?,
+                                                  messages_in = ?, messages_out = ?, reopened_from = ?, reopen_score = ?
                                 WHERE id = ?
                                 """,
                         Timestamp.valueOf(t.lastActivity),
                         toTimestamp(t.firstResponseAt),
+                        t.firstResponder,
+                        t.frtSeconds,
                         toTimestamp(t.inProgressAt),
                         toTimestamp(t.closedAt),
                         t.closedBy,
+                        t.resolutionSeconds,
                         t.status,
                         CategoryRules.nameOf(t.categoryRank),
                         t.categoryRank,
@@ -486,20 +517,27 @@ public class AnalyticsSyncService {
             ps.setTimestamp(2, Timestamp.valueOf(t.openedAt));
             ps.setTimestamp(3, Timestamp.valueOf(t.lastActivity));
             ps.setTimestamp(4, toTimestamp(t.firstResponseAt));
-            ps.setTimestamp(5, toTimestamp(t.inProgressAt));
-            ps.setTimestamp(6, toTimestamp(t.closedAt));
-            ps.setString(7, t.closedBy);
-            ps.setString(8, t.status);
-            ps.setString(9, CategoryRules.nameOf(t.categoryRank));
-            ps.setInt(10, t.categoryRank);
-            ps.setInt(11, t.messagesIn);
-            ps.setInt(12, t.messagesOut);
-            if (t.reopenedFrom == null) {
-                ps.setNull(13, java.sql.Types.BIGINT);
+            ps.setString(5, t.firstResponder);
+            setNullableLong(ps, 6, t.frtSeconds);
+            ps.setTimestamp(7, toTimestamp(t.inProgressAt));
+            ps.setTimestamp(8, toTimestamp(t.closedAt));
+            ps.setString(9, t.closedBy);
+            setNullableLong(ps, 10, t.resolutionSeconds);
+            ps.setString(11, t.status);
+            ps.setString(12, CategoryRules.nameOf(t.categoryRank));
+            ps.setInt(13, t.categoryRank);
+            ps.setInt(14, t.messagesIn);
+            ps.setInt(15, t.messagesOut);
+            setNullableLong(ps, 16, t.reopenedFrom);
+            ps.setInt(17, t.reopenScore);
+        }
+
+        private void setNullableLong(PreparedStatement ps, int index, Long value) throws java.sql.SQLException {
+            if (value == null) {
+                ps.setNull(index, java.sql.Types.BIGINT);
             } else {
-                ps.setLong(13, t.reopenedFrom);
+                ps.setLong(index, value);
             }
-            ps.setInt(14, t.reopenScore);
         }
 
         private LocalDateTime toLocal(Timestamp ts) {

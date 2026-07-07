@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.Group;
 import com.temnet.temnet_parser.support.SqlLoader;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -15,7 +16,7 @@ public class GroupRepository {
 
     private final JdbcClient jdbcClient;
 
-    public GroupRepository(JdbcClient jdbcClient) {
+    public GroupRepository(@Qualifier("analyticsJdbcClient") JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
     }
 

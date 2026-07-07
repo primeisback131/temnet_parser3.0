@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.ChatMessage;
 import com.temnet.temnet_parser.support.SqlLoader;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -16,7 +17,7 @@ public class ChatRepository {
 
     private final JdbcClient jdbcClient;
 
-    public ChatRepository(JdbcClient jdbcClient) {
+    public ChatRepository(@Qualifier("analyticsJdbcClient") JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
     }
 

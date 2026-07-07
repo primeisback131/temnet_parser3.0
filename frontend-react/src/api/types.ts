@@ -56,6 +56,31 @@ export interface CategoryCount {
   requests: number;
 }
 
+export interface ResolutionPoint {
+  bucket: string; // ISO date (closing date)
+  resolved: number;
+  avgSeconds: number;
+  p50Seconds: number;
+  p90Seconds: number;
+}
+
+export interface BacklogTicket {
+  client: string;
+  groups: string | null;
+  category: string;
+  openedAt: string;
+  lastActivity: string;
+  firstResponseAt: string | null;
+  messagesIn: number;
+  messagesOut: number;
+  waitingSeconds: number; // working seconds, relative to `asOf`
+}
+
+export interface Backlog {
+  asOf: string | null; // timestamp of the freshest ingested message
+  tickets: BacklogTicket[];
+}
+
 export interface OperatorStat {
   operator: string;
   messages: number;

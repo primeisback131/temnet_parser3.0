@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS message (
     source_id  BIGINT NOT NULL,
     client     VARCHAR(191) NOT NULL,
     author     VARCHAR(191) NOT NULL,
+    recipient  VARCHAR(191) NOT NULL,
     direction  ENUM('in','out') NOT NULL,
     txt        MEDIUMTEXT NOT NULL,
     created_at DATETIME NOT NULL,
@@ -39,9 +40,12 @@ CREATE TABLE IF NOT EXISTS ticket (
     opened_at         DATETIME NOT NULL,
     last_activity     DATETIME NOT NULL,
     first_response_at DATETIME NULL,
+    first_responder   VARCHAR(191) NULL,
+    frt_seconds       BIGINT NULL,
     in_progress_at    DATETIME NULL,
     closed_at         DATETIME NULL,
     closed_by         VARCHAR(191) NULL,
+    resolution_seconds BIGINT NULL,
     status            ENUM('open','closed','rejected','expired') NOT NULL DEFAULT 'open',
     category          VARCHAR(64) NOT NULL,
     category_rank     TINYINT NOT NULL,
@@ -54,6 +58,13 @@ CREATE TABLE IF NOT EXISTS ticket (
     KEY idx_ticket_opened (opened_at),
     KEY idx_ticket_closed (closed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Upgrades for databases created by an older version (no-ops on fresh ones).
+-- frt_seconds / resolution_seconds are WORKING seconds, precomputed at ingest.
+ALTER TABLE message ADD COLUMN IF NOT EXISTS recipient VARCHAR(191) NOT NULL DEFAULT '' AFTER author;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS first_responder VARCHAR(191) NULL AFTER first_response_at;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS frt_seconds BIGINT NULL AFTER first_responder;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resolution_seconds BIGINT NULL AFTER closed_by;
 
 -- Group membership copied from the dump (sr_user), so analytics queries never
 -- need the source DB.

@@ -1,15 +1,11 @@
 package com.temnet.temnet_parser.support;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 /**
  * Keyword dictionary that classifies a request message into a problem
  * category. Categories are ordered by priority: the first one whose keyword
  * matches wins, so broader buckets (Доступ, Оборудование) come last.
- *
- * Keywords are code-controlled (never user input), so they are safe to inline
- * into the generated SQL CASE expression.
  */
 public final class CategoryRules {
 
@@ -43,8 +39,8 @@ public final class CategoryRules {
     }
 
     /**
-     * Java-side twin of {@link #rankExpression}: priority rank of the first
-     * category whose keyword occurs in the text, or {@link #otherRank()}.
+     * Priority rank of the first category whose keyword occurs in the text,
+     * or {@link #otherRank()}. Used by the ingest state machine.
      */
     public static int rankOf(String text) {
         String lower = text.toLowerCase();
@@ -63,36 +59,4 @@ public final class CategoryRules {
         return rank >= 1 && rank <= CATEGORIES.size() ? CATEGORIES.get(rank - 1).name() : OTHER;
     }
 
-    /**
-     * Builds a {@code CASE} that maps a text column to a priority rank
-     * (1 = highest-priority category .. N, with N+1 for the "other" bucket).
-     * Used to pick the best-matching category across a request's messages
-     * via {@code MIN(rank)}.
-     */
-    public static String rankExpression(String column) {
-        String lower = "LOWER(" + column + ")";
-        StringBuilder sb = new StringBuilder("CASE");
-        int rank = 1;
-        for (Category category : CATEGORIES) {
-            String condition = category.keywords().stream()
-                    .map(kw -> lower + " LIKE '%" + kw + "%'")
-                    .collect(Collectors.joining(" OR "));
-            sb.append(" WHEN ").append(condition).append(" THEN ").append(rank);
-            rank++;
-        }
-        sb.append(" ELSE ").append(rank).append(" END");
-        return sb.toString();
-    }
-
-    /** Builds a {@code CASE} that maps a rank back to its category name. */
-    public static String rankToNameExpression(String rankColumn) {
-        StringBuilder sb = new StringBuilder("CASE ").append(rankColumn);
-        int rank = 1;
-        for (Category category : CATEGORIES) {
-            sb.append(" WHEN ").append(rank).append(" THEN '").append(category.name()).append("'");
-            rank++;
-        }
-        sb.append(" ELSE '").append(OTHER).append("' END");
-        return sb.toString();
-    }
 }

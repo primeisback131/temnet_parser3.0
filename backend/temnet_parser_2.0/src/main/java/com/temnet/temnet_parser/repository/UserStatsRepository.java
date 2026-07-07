@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.UserStat;
 import com.temnet.temnet_parser.support.SqlLoader;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -16,7 +17,7 @@ public class UserStatsRepository {
 
     private final JdbcClient jdbcClient;
 
-    public UserStatsRepository(JdbcClient jdbcClient) {
+    public UserStatsRepository(@Qualifier("analyticsJdbcClient") JdbcClient jdbcClient) {
         this.jdbcClient = jdbcClient;
     }
 

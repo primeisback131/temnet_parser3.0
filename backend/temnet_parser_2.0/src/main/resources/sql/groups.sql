@@ -1,4 +1,5 @@
-SELECT name AS group_name
-FROM sr_group
-WHERE name NOT LIKE 'help%'
-  AND name != 'all'
+SELECT DISTINCT grp AS group_name
+FROM client_group
+WHERE grp NOT LIKE 'help%'
+  AND grp != 'all'
+ORDER BY group_name

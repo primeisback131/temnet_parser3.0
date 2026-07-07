@@ -1,9 +1,18 @@
-import { Card, Col, DatePicker, Row, Segmented, Select, Space, Statistic } from "antd";
+import { Card, Col, DatePicker, Row, Segmented, Select, Space, Statistic, Table, Tag } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
-import { useCategories, useGroups, useHeatmap, useSla, useTimeseries } from "../api/queries";
-import type { Bucket } from "../api/types";
+import {
+  useBacklog,
+  useCategories,
+  useGroups,
+  useHeatmap,
+  useResolution,
+  useSla,
+  useTimeseries,
+} from "../api/queries";
+import type { BacklogTicket, Bucket } from "../api/types";
 import EChart from "../components/EChart";
 import { defaultRange, toApiDate } from "../lib/date";
 import { humanizeSeconds } from "../lib/format";
@@ -30,6 +39,8 @@ export default function MetricsPage() {
   const { data = [], isFetching } = useTimeseries(startStr, endStr, bucket, group);
   const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
   const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
+  const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
+  const { data: backlog, isFetching: backlogLoading } = useBacklog(group);
   const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
 
   const categoryStats = useMemo(() => {
@@ -203,6 +214,93 @@ export default function MetricsPage() {
     };
   }, [sla, labelFormat]);
 
+  const resolutionOption = useMemo<EChartsOption>(() => {
+    const labels = resolution.map((p) => dayjs(p.bucket).format(labelFormat));
+    return {
+      tooltip: {
+        trigger: "axis",
+        formatter: (params) => {
+          const arr = params as unknown as Array<{ axisValue: string; dataIndex: number }>;
+          const p = resolution[arr[0].dataIndex];
+          return (
+            `${arr[0].axisValue}<br/>` +
+            `Медиана (p50): <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
+            `p90: <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
+            `Среднее: ${humanizeSeconds(p.avgSeconds)}<br/>` +
+            `Решено: ${p.resolved}`
+          );
+        },
+      },
+      legend: { data: ["Медиана (p50)", "p90", "Среднее"], top: 0 },
+      grid: { left: 56, right: 24, top: 40, bottom: 64 },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      xAxis: { type: "category", data: labels, boundaryGap: false, axisLabel: { hideOverlap: true } },
+      yAxis: {
+        type: "value",
+        name: "раб. ч",
+        axisLabel: { formatter: (v: number) => String(Math.round(v)) },
+      },
+      series: [
+        {
+          name: "Медиана (p50)",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#21b573" },
+          data: resolution.map((p) => +(p.p50Seconds / 3600).toFixed(1)),
+        },
+        {
+          name: "p90",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#ff7a45" },
+          data: resolution.map((p) => +(p.p90Seconds / 3600).toFixed(1)),
+        },
+        {
+          name: "Среднее",
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { type: "dashed" },
+          itemStyle: { color: "#9254de" },
+          data: resolution.map((p) => +(p.avgSeconds / 3600).toFixed(1)),
+        },
+      ],
+    };
+  }, [resolution, labelFormat]);
+
+  const backlogColumns: ColumnsType<BacklogTicket> = useMemo(
+    () => [
+      { title: "Клиент", dataIndex: "client", render: (v: string) => <Tag>{v}</Tag> },
+      { title: "Компания", dataIndex: "groups" },
+      { title: "Категория", dataIndex: "category" },
+      {
+        title: "Открыто",
+        dataIndex: "openedAt",
+        render: (v: string) => dayjs(v).format("DD MMM HH:mm"),
+      },
+      {
+        title: "Ждёт (раб. время)",
+        dataIndex: "waitingSeconds",
+        defaultSortOrder: "descend",
+        sorter: (a, b) => a.waitingSeconds - b.waitingSeconds,
+        render: (v: number) => <b>{humanizeSeconds(v)}</b>,
+      },
+      {
+        title: "Сообщений (кл./оп.)",
+        key: "messages",
+        render: (_, r) => `${r.messagesIn} / ${r.messagesOut}`,
+      },
+      {
+        title: "Первый ответ",
+        dataIndex: "firstResponseAt",
+        render: (v: string | null) => (v ? dayjs(v).format("DD MMM HH:mm") : <Tag color="red">нет</Tag>),
+      },
+    ],
+    [],
+  );
+
   // Number of times each weekday (0=Mon..6=Sun) occurs in the selected range,
   // used to turn cell sums into per-occurrence averages.
   const weekdayCounts = useMemo(() => {
@@ -312,6 +410,33 @@ export default function MetricsPage() {
         }
       >
         <EChart option={slaOption} loading={slaLoading} height={300} />
+      </Card>
+
+      <Card
+        title="Время решения заявки"
+        extra={<span style={{ color: "#8c8c8c" }}>от открытия до «закрыта заявка», рабочее время</span>}
+      >
+        <EChart option={resolutionOption} loading={resolutionLoading} height={300} />
+      </Card>
+
+      <Card
+        title={`Открытые обращения — ${backlog?.tickets.length ?? 0}`}
+        extra={
+          backlog?.asOf ? (
+            <span style={{ color: "#8c8c8c" }}>
+              данные на {dayjs(backlog.asOf).format("DD MMM YYYY HH:mm")}
+            </span>
+          ) : null
+        }
+      >
+        <Table
+          rowKey={(r) => `${r.client}-${r.openedAt}`}
+          columns={backlogColumns}
+          dataSource={backlog?.tickets ?? []}
+          loading={backlogLoading}
+          size="small"
+          pagination={{ pageSize: 10, hideOnSinglePage: true }}
+        />
       </Card>
 
       <Card

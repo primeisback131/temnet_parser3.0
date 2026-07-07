@@ -10,9 +10,12 @@ class Ticket {
     final LocalDateTime openedAt;
     LocalDateTime lastActivity;
     LocalDateTime firstResponseAt;
+    String firstResponder;
+    Long frtSeconds;
     LocalDateTime inProgressAt;
     LocalDateTime closedAt;
     String closedBy;
+    Long resolutionSeconds;
     String status = "open";
     int categoryRank;
     int messagesIn;
