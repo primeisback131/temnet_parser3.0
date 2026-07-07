@@ -1,11 +1,12 @@
 package com.temnet.temnet_parser.service;
 
-import com.temnet.temnet_parser.dto.Backlog;
+import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.repository.MetricsRepository;
@@ -61,9 +62,17 @@ public class MetricsService {
         return metricsRepository.resolution(start, end, groupName, bucket);
     }
 
-    @Cacheable("backlog")
-    public Backlog backlog(String groupName) {
-        return metricsRepository.backlog(groupName);
+    @Cacheable("reopens")
+    public List<ReopenPoint> reopens(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.reopens(start, end, groupName, bucket);
+    }
+
+    @Cacheable("alerts")
+    public AlertsReport alerts() {
+        return metricsRepository.alerts();
     }
 
     @Cacheable("categories")

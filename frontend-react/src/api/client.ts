@@ -1,5 +1,5 @@
 import type {
-  Backlog,
+  AlertsReport,
   Bucket,
   CategoryCount,
   ChatMessage,
@@ -8,6 +8,7 @@ import type {
   HeatmapCell,
   MetricPoint,
   OperatorStat,
+  ReopenPoint,
   ResolutionPoint,
   SlaPoint,
   UserStat,
@@ -72,8 +73,15 @@ export const api = {
       ...(groupName ? { groupName } : {}),
     }),
 
-  getBacklog: (groupName?: string) =>
-    getJson<Backlog>("/metrics/backlog", groupName ? { groupName } : {}),
+  getReopens: (start: string, end: string, bucket: Bucket, groupName?: string) =>
+    getJson<ReopenPoint[]>("/metrics/reopens", {
+      start,
+      end,
+      bucket,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getAlerts: () => getJson<AlertsReport>("/metrics/alerts"),
 
   getCategories: (start: string, end: string, groupName?: string) =>
     getJson<CategoryCount[]>("/metrics/categories", {

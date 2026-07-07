@@ -71,10 +71,22 @@ export function useResolution(
   });
 }
 
-export function useBacklog(groupName: string | null) {
+export function useReopens(
+  start: string,
+  end: string,
+  bucket: Bucket,
+  groupName: string | null,
+) {
   return useQuery({
-    queryKey: ["backlog", groupName],
-    queryFn: () => api.getBacklog(groupName ?? undefined),
+    queryKey: ["reopens", start, end, bucket, groupName],
+    queryFn: () => api.getReopens(start, end, bucket, groupName ?? undefined),
+  });
+}
+
+export function useAlerts() {
+  return useQuery({
+    queryKey: ["alerts"],
+    queryFn: api.getAlerts,
   });
 }
 

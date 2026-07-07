@@ -1,20 +1,23 @@
-import { Card, Col, DatePicker, Row, Segmented, Select, Space, Statistic, Table, Tag } from "antd";
-import type { ColumnsType } from "antd/es/table";
+import { FileExcelOutlined } from "@ant-design/icons";
+import { Button, Card, Col, DatePicker, Empty, Row, Segmented, Select, Space, Statistic, Tag, Tooltip } from "antd";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
+import { api } from "../api/client";
 import {
-  useBacklog,
+  useAlerts,
   useCategories,
   useGroups,
   useHeatmap,
+  useReopens,
   useResolution,
   useSla,
   useTimeseries,
 } from "../api/queries";
-import type { BacklogTicket, Bucket } from "../api/types";
+import type { Bucket } from "../api/types";
 import EChart from "../components/EChart";
 import { defaultRange, toApiDate } from "../lib/date";
+import { exportWorkbook } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
 
 const { RangePicker } = DatePicker;
@@ -40,7 +43,8 @@ export default function MetricsPage() {
   const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
   const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
   const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
-  const { data: backlog, isFetching: backlogLoading } = useBacklog(group);
+  const { data: reopens = [], isFetching: reopensLoading } = useReopens(startStr, endStr, bucket, group);
+  const { data: alertsReport } = useAlerts();
   const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
 
   const categoryStats = useMemo(() => {
@@ -270,36 +274,145 @@ export default function MetricsPage() {
     };
   }, [resolution, labelFormat]);
 
-  const backlogColumns: ColumnsType<BacklogTicket> = useMemo(
-    () => [
-      { title: "Клиент", dataIndex: "client", render: (v: string) => <Tag>{v}</Tag> },
-      { title: "Компания", dataIndex: "groups" },
-      { title: "Категория", dataIndex: "category" },
-      {
-        title: "Открыто",
-        dataIndex: "openedAt",
-        render: (v: string) => dayjs(v).format("DD MMM HH:mm"),
-      },
-      {
-        title: "Ждёт (раб. время)",
-        dataIndex: "waitingSeconds",
-        defaultSortOrder: "descend",
-        sorter: (a, b) => a.waitingSeconds - b.waitingSeconds,
-        render: (v: number) => <b>{humanizeSeconds(v)}</b>,
-      },
-      {
-        title: "Сообщений (кл./оп.)",
-        key: "messages",
-        render: (_, r) => `${r.messagesIn} / ${r.messagesOut}`,
-      },
-      {
-        title: "Первый ответ",
-        dataIndex: "firstResponseAt",
-        render: (v: string | null) => (v ? dayjs(v).format("DD MMM HH:mm") : <Tag color="red">нет</Tag>),
-      },
-    ],
-    [],
-  );
+  const reopenTotals = useMemo(() => {
+    const closed = reopens.reduce((n, p) => n + p.closed, 0);
+    const probable = reopens.reduce((n, p) => n + p.probable, 0);
+    const confirmed = reopens.reduce((n, p) => n + p.confirmed, 0);
+    const rate = closed > 0 ? Math.round((probable / closed) * 1000) / 10 : 0;
+    return { closed, probable, confirmed, rate };
+  }, [reopens]);
+
+  const reopensOption = useMemo<EChartsOption>(() => {
+    const labels = reopens.map((p) => dayjs(p.bucket).format(labelFormat));
+    return {
+      tooltip: { trigger: "axis" },
+      legend: { data: ["Вероятные", "Подтверждённые", "% от закрытых"], top: 0 },
+      grid: { left: 56, right: 56, top: 40, bottom: 64 },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      xAxis: { type: "category", data: labels, axisLabel: { hideOverlap: true } },
+      yAxis: [
+        { type: "value", name: "Повторы" },
+        { type: "value", name: "%", position: "right", splitLine: { show: false } },
+      ],
+      series: [
+        {
+          name: "Вероятные",
+          type: "bar",
+          itemStyle: { color: "#9cc0ff" },
+          data: reopens.map((p) => p.probable),
+        },
+        {
+          name: "Подтверждённые",
+          type: "bar",
+          barGap: "-100%",
+          itemStyle: { color: "#3e79f7" },
+          data: reopens.map((p) => p.confirmed),
+        },
+        {
+          name: "% от закрытых",
+          type: "line",
+          yAxisIndex: 1,
+          smooth: true,
+          showSymbol: false,
+          itemStyle: { color: "#ff7a45" },
+          data: reopens.map((p) => (p.closed > 0 ? +((p.probable / p.closed) * 100).toFixed(1) : 0)),
+        },
+      ],
+    };
+  }, [reopens, labelFormat]);
+
+  const exportReport = async () => {
+    const [companies, operators] = await Promise.all([
+      api.getCompanies(startStr, endStr),
+      api.getOperators(startStr, endStr, group ?? undefined),
+    ]);
+    await exportWorkbook(
+      [
+        {
+          name: "Сводка",
+          rows: [
+            { Показатель: "Период", Значение: `${startStr} — ${endStr}` },
+            { Показатель: "Группа", Значение: group ?? "все" },
+            { Показатель: "Сообщений", Значение: totals.messages },
+            { Показатель: "Закрытых заявок", Значение: totals.closed },
+            { Показатель: "Отклонённых", Значение: totals.rejected },
+            { Показатель: "Повторных обращений (вероятных)", Значение: reopenTotals.probable },
+            { Показатель: "Повторных обращений, % от закрытых", Значение: reopenTotals.rate },
+            {
+              Показатель: "Первый ответ, медиана",
+              Значение: overallFrt ? humanizeSeconds(overallFrt.median) : "—",
+            },
+          ],
+        },
+        {
+          name: "Динамика",
+          rows: data.map((p) => ({
+            Период: p.bucket,
+            Сообщений: p.messages,
+            Закрыто: p.closed,
+            Отклонено: p.rejected,
+            "В работе": p.inProgress,
+          })),
+        },
+        {
+          name: "Первый ответ",
+          rows: sla.map((p) => ({
+            Период: p.bucket,
+            Ответов: p.responses,
+            "Медиана, с": Math.round(p.p50Seconds),
+            "p90, с": Math.round(p.p90Seconds),
+            "Среднее, с": Math.round(p.avgSeconds),
+          })),
+        },
+        {
+          name: "Время решения",
+          rows: resolution.map((p) => ({
+            Период: p.bucket,
+            Решено: p.resolved,
+            "Медиана, мин": Math.round(p.p50Seconds / 60),
+            "p90, ч": +(p.p90Seconds / 3600).toFixed(1),
+            "Среднее, ч": +(p.avgSeconds / 3600).toFixed(1),
+          })),
+        },
+        {
+          name: "Повторы",
+          rows: reopens.map((p) => ({
+            Период: p.bucket,
+            Закрыто: p.closed,
+            Вероятные: p.probable,
+            Подтверждённые: p.confirmed,
+          })),
+        },
+        {
+          name: "Категории",
+          rows: categories.map((c) => ({ Категория: c.category, Обращений: c.requests })),
+        },
+        {
+          name: "Операторы",
+          rows: operators.map((o) => ({
+            Оператор: o.operator,
+            Закрыто: o.closed,
+            Отклонено: o.rejected,
+            Сообщений: o.messages,
+            Клиентов: o.clients,
+            "Ср. первый ответ, с": o.avgReplySeconds == null ? "" : Math.round(o.avgReplySeconds),
+          })),
+        },
+        {
+          name: "Компании",
+          rows: companies.map((c) => ({
+            Компания: c.groupName,
+            "Активных пользователей": c.activeUsers,
+            "Всего пользователей": c.totalUsers,
+            Закрыто: c.closedRequests,
+            Отклонено: c.rejectedRequests,
+            Сообщений: c.totalMessages,
+          })),
+        },
+      ],
+      `Отчёт_${group ?? "все"}_${startStr}_${endStr}`,
+    );
+  };
 
   // Number of times each weekday (0=Mon..6=Sun) occurs in the selected range,
   // used to turn cell sums into per-occurrence averages.
@@ -375,17 +488,58 @@ export default function MetricsPage() {
               ]}
             />
           </Space>
-          <Segmented
-            value={bucket}
-            onChange={(v) => setBucket(v as Bucket)}
-            options={[
-              { label: "День", value: "day" },
-              { label: "Неделя", value: "week" },
-              { label: "Месяц", value: "month" },
-            ]}
-          />
+          <Space wrap size={12}>
+            <Segmented
+              value={bucket}
+              onChange={(v) => setBucket(v as Bucket)}
+              options={[
+                { label: "День", value: "day" },
+                { label: "Неделя", value: "week" },
+                { label: "Месяц", value: "month" },
+              ]}
+            />
+            <Tooltip title="Сводный отчёт за выбранный период: динамика, SLA, время решения, повторы, категории, операторы, компании">
+              <Button icon={<FileExcelOutlined />} onClick={exportReport}>
+                Отчёт
+              </Button>
+            </Tooltip>
+          </Space>
         </Space>
       </Card>
+
+      {alertsReport && alertsReport.alerts.length > 0 && (
+        <Card
+          title="Аномалии за последнюю неделю данных"
+          extra={
+            alertsReport.asOf ? (
+              <span style={{ color: "#8c8c8c" }}>
+                {dayjs(alertsReport.weekStart).format("DD MMM")} —{" "}
+                {dayjs(alertsReport.asOf).format("DD MMM YYYY HH:mm")}
+              </span>
+            ) : null
+          }
+        >
+          <Space direction="vertical" size={8}>
+            {alertsReport.alerts.map((a, i) => (
+              <div key={i}>
+                {a.type === "message_spike" ? (
+                  <>
+                    <Tag color="volcano">Всплеск</Tag>
+                    <b>{a.groupName}</b>: {Math.round(a.current)} сообщений за неделю против ~
+                    {Math.round(a.baseline)}/нед (×{a.ratio})
+                  </>
+                ) : (
+                  <>
+                    <Tag color="red">SLA</Tag>
+                    <b>{a.groupName}</b>: первый ответ {humanizeSeconds(a.current)} против{" "}
+                    {humanizeSeconds(a.baseline)} (×{a.ratio})
+                  </>
+                )}
+              </div>
+            ))}
+          </Space>
+        </Card>
+      )}
 
       <Row gutter={[16, 16]}>
         <Col xs={12} md={6}><Card><Statistic title="Сообщений" value={totals.messages} valueStyle={{ color: COLORS.messages }} /></Card></Col>
@@ -420,23 +574,19 @@ export default function MetricsPage() {
       </Card>
 
       <Card
-        title={`Открытые обращения — ${backlog?.tickets.length ?? 0}`}
+        title="Повторные обращения"
         extra={
-          backlog?.asOf ? (
-            <span style={{ color: "#8c8c8c" }}>
-              данные на {dayjs(backlog.asOf).format("DD MMM YYYY HH:mm")}
-            </span>
-          ) : null
+          <span style={{ color: "#8c8c8c" }}>
+            За период: <b>{reopenTotals.probable}</b> вероятных ({reopenTotals.rate}% от закрытых) ·{" "}
+            {reopenTotals.confirmed} подтверждённых
+          </span>
         }
       >
-        <Table
-          rowKey={(r) => `${r.client}-${r.openedAt}`}
-          columns={backlogColumns}
-          dataSource={backlog?.tickets ?? []}
-          loading={backlogLoading}
-          size="small"
-          pagination={{ pageSize: 10, hideOnSinglePage: true }}
-        />
+        {reopens.length === 0 && !reopensLoading ? (
+          <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <EChart option={reopensOption} loading={reopensLoading} height={300} />
+        )}
       </Card>
 
       <Card

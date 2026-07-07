@@ -1,15 +1,15 @@
 package com.temnet.temnet_parser.repository;
 
-import com.temnet.temnet_parser.dto.Backlog;
-import com.temnet.temnet_parser.dto.BacklogTicket;
+import com.temnet.temnet_parser.dto.Alert;
+import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
-import com.temnet.temnet_parser.support.BusinessTime;
 import com.temnet.temnet_parser.support.SqlLoader;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
@@ -35,13 +35,21 @@ public class MetricsRepository {
     private static final String CATEGORIES_SQL = SqlLoader.load("sql/categories.sql");
     private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
     private static final String RESOLUTION_SQL = SqlLoader.load("sql/resolution.sql");
-    private static final String BACKLOG_SQL = SqlLoader.load("sql/backlog.sql");
+    private static final String REOPENS_SQL = SqlLoader.load("sql/reopens.sql");
 
     // Outlier guards, in WORKING seconds (must match the 10-hour business day
     // of BusinessTime): first responses over one working day and resolutions
     // over five working days are treated as mis-pairings and dropped.
     private static final int MAX_FRT_SECONDS = 10 * 3600;
     private static final int MAX_RESOLUTION_SECONDS = 5 * 10 * 3600;
+
+    // Anomaly thresholds: a group alerts on >= 2x its weekly message baseline
+    // (with a volume floor to skip tiny groups) or >= 2x its average first
+    // response, with at least a handful of tickets in the week.
+    private static final int SPIKE_MIN_MESSAGES = 30;
+    private static final double SPIKE_RATIO = 2.0;
+    private static final int SLA_MIN_TICKETS = 10;
+    private static final double SLA_DEGRADATION_RATIO = 2.0;
 
     private final JdbcClient analytics;
 
@@ -126,10 +134,24 @@ public class MetricsRepository {
                 .query(new DataClassRowMapper<>(OperatorStat.class)).list();
     }
 
-    /** Open tickets as of the freshest ingested message. */
-    public Backlog backlog(String groupName) {
+    /** Repeat requests (probable/confirmed reopens) vs closures per bucket. */
+    public List<ReopenPoint> reopens(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
         boolean hasGroup = hasGroup(groupName);
 
+        String sql = REOPENS_SQL
+                .replace("${bucketClosed}", bucket.expression("t.closed_at"))
+                .replace("${bucketOpened}", bucket.expression("t.opened_at"))
+                .replace("${groupFilter}", clientInGroup("t", hasGroup));
+
+        return withRange(sql, start, end, hasGroup ? groupName : null)
+                .query(new DataClassRowMapper<>(ReopenPoint.class)).list();
+    }
+
+    /**
+     * Anomalies in the last 7 days of ingested data against the preceding
+     * 8 weeks: per-group message spikes and first-response degradation.
+     */
+    public AlertsReport alerts() {
         LocalDateTime asOf = analytics.sql("SELECT MAX(created_at) FROM message")
                 .query((rs, i) -> {
                     Timestamp ts = rs.getTimestamp(1);
@@ -138,31 +160,72 @@ public class MetricsRepository {
                 .list()
                 .get(0);
         if (asOf == null) {
-            return new Backlog(null, List.of());
+            return new AlertsReport(null, null, List.of());
         }
+        LocalDateTime weekStart = asOf.minusDays(7);
+        LocalDateTime baselineStart = weekStart.minusWeeks(8);
 
-        String sql = BACKLOG_SQL.replace("${groupFilter}", clientInGroup("t", hasGroup));
+        List<Alert> alerts = new java.util.ArrayList<>();
 
-        var spec = analytics.sql(sql);
-        if (hasGroup) {
-            spec = spec.param("groupName", groupName);
-        }
-        List<BacklogTicket> tickets = spec.query((rs, i) -> {
-            LocalDateTime openedAt = rs.getTimestamp("opened_at").toLocalDateTime();
-            Timestamp firstResponse = rs.getTimestamp("first_response_at");
-            return new BacklogTicket(
-                    rs.getString("client"),
-                    rs.getString("groups"),
-                    rs.getString("category"),
-                    openedAt,
-                    rs.getTimestamp("last_activity").toLocalDateTime(),
-                    firstResponse == null ? null : firstResponse.toLocalDateTime(),
-                    rs.getInt("messages_in"),
-                    rs.getInt("messages_out"),
-                    BusinessTime.secondsBetween(openedAt, asOf));
-        }).list();
+        alerts.addAll(analytics.sql("""
+                        SELECT cg.grp AS group_name,
+                               SUM(m.created_at >= :weekStart)       AS current_count,
+                               SUM(m.created_at < :weekStart) / 8.0  AS baseline
+                        FROM message m
+                        JOIN client_group cg ON cg.client = m.client
+                        WHERE m.created_at >= :baselineStart
+                          AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all'
+                        GROUP BY cg.grp
+                        HAVING current_count >= :minMessages
+                           AND baseline > 0
+                           AND current_count >= :spikeRatio * baseline
+                        """)
+                .param("weekStart", weekStart)
+                .param("baselineStart", baselineStart)
+                .param("minMessages", SPIKE_MIN_MESSAGES)
+                .param("spikeRatio", SPIKE_RATIO)
+                .query((rs, i) -> {
+                    double current = rs.getDouble("current_count");
+                    double baseline = rs.getDouble("baseline");
+                    return new Alert("message_spike", rs.getString("group_name"), current, baseline,
+                            round1(current / baseline));
+                })
+                .list());
 
-        return new Backlog(asOf, tickets);
+        alerts.addAll(analytics.sql("""
+                        SELECT cg.grp AS group_name,
+                               AVG(IF(t.opened_at >= :weekStart, t.frt_seconds, NULL)) AS current_avg,
+                               AVG(IF(t.opened_at < :weekStart, t.frt_seconds, NULL))  AS baseline_avg,
+                               SUM(t.opened_at >= :weekStart)                          AS current_count
+                        FROM ticket t
+                        JOIN client_group cg ON cg.client = t.client
+                        WHERE t.opened_at >= :baselineStart
+                          AND t.frt_seconds IS NOT NULL AND t.frt_seconds <= :maxFrtSeconds
+                          AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all'
+                        GROUP BY cg.grp
+                        HAVING current_count >= :minTickets
+                           AND baseline_avg IS NOT NULL AND baseline_avg > 0
+                           AND current_avg >= :degradationRatio * baseline_avg
+                        """)
+                .param("weekStart", weekStart)
+                .param("baselineStart", baselineStart)
+                .param("maxFrtSeconds", MAX_FRT_SECONDS)
+                .param("minTickets", SLA_MIN_TICKETS)
+                .param("degradationRatio", SLA_DEGRADATION_RATIO)
+                .query((rs, i) -> {
+                    double current = rs.getDouble("current_avg");
+                    double baseline = rs.getDouble("baseline_avg");
+                    return new Alert("sla_degradation", rs.getString("group_name"), current, baseline,
+                            round1(current / baseline));
+                })
+                .list());
+
+        alerts.sort(java.util.Comparator.comparingDouble(Alert::ratio).reversed());
+        return new AlertsReport(asOf, weekStart, alerts);
+    }
+
+    private static double round1(double value) {
+        return Math.round(value * 10.0) / 10.0;
     }
 
     private JdbcClient.StatementSpec withRange(String sql, LocalDate start, LocalDate end, String groupName) {

@@ -1,11 +1,12 @@
 package com.temnet.temnet_parser.controller;
 
-import com.temnet.temnet_parser.dto.Backlog;
+import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
 import com.temnet.temnet_parser.service.MetricsService;
@@ -65,9 +66,18 @@ public class MetricsController {
         return metricsService.resolution(start, end, groupName, Bucket.from(bucket));
     }
 
-    @GetMapping("/backlog")
-    public Backlog backlog(@RequestParam(required = false) String groupName) {
-        return metricsService.backlog(groupName);
+    @GetMapping("/reopens")
+    public List<ReopenPoint> reopens(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName,
+            @RequestParam(defaultValue = "day") String bucket) {
+        return metricsService.reopens(start, end, groupName, Bucket.from(bucket));
+    }
+
+    @GetMapping("/alerts")
+    public AlertsReport alerts() {
+        return metricsService.alerts();
     }
 
     @GetMapping("/categories")

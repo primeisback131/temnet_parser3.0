@@ -64,21 +64,25 @@ export interface ResolutionPoint {
   p90Seconds: number;
 }
 
-export interface BacklogTicket {
-  client: string;
-  groups: string | null;
-  category: string;
-  openedAt: string;
-  lastActivity: string;
-  firstResponseAt: string | null;
-  messagesIn: number;
-  messagesOut: number;
-  waitingSeconds: number; // working seconds, relative to `asOf`
+export interface ReopenPoint {
+  bucket: string; // ISO date
+  closed: number; // closures (rate denominator)
+  probable: number; // reopens with any signal
+  confirmed: number; // reopens with strong signal (marker words)
 }
 
-export interface Backlog {
+export interface Alert {
+  type: "message_spike" | "sla_degradation";
+  groupName: string;
+  current: number;
+  baseline: number;
+  ratio: number;
+}
+
+export interface AlertsReport {
   asOf: string | null; // timestamp of the freshest ingested message
-  tickets: BacklogTicket[];
+  weekStart: string | null;
+  alerts: Alert[];
 }
 
 export interface OperatorStat {
