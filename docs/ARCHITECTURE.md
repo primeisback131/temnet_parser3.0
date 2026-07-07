@@ -6,11 +6,12 @@
 - [1. Обзор](#1-обзор)
 - [2. Стек](#2-стек)
 - [3. Структура репозитория](#3-структура-репозитория)
-- [4. Модель данных (ejabberd)](#4-модель-данных-ejabberd)
-- [5. Backend](#5-backend)
-- [6. Frontend](#6-frontend)
-- [7. Сборка и запуск](#7-сборка-и-запуск)
-- [8. Соглашения](#8-соглашения)
+- [4. Модель данных](#4-модель-данных)
+- [5. Синхронизация и тикеты](#5-синхронизация-и-тикеты)
+- [6. Backend](#6-backend)
+- [7. Frontend](#7-frontend)
+- [8. Сборка и запуск](#8-сборка-и-запуск)
+- [9. Соглашения](#9-соглашения)
 
 > Методология расчёта метрик вынесена в отдельный документ — см.
 > [METRICS.md](METRICS.md).
@@ -19,24 +20,30 @@
 
 ## 1. Обзор
 
-Приложение читает базу **ejabberd** (MariaDB) — архив сообщений между
+Приложение читает дамп базы **ejabberd** (MariaDB) — архив сообщений между
 сотрудниками компаний-клиентов и поддержкой (аккаунты `help*`) — и отдаёт по
-ней отчёты и аналитику:
+нему отчёты и аналитику:
 
 - табличные отчёты по компаниям и пользователям;
 - история переписки;
-- аналитические метрики: динамика обращений, нагрузка по часам, время первого
-  ответа (SLA), лидерборд операторов, категоризация обращений.
+- заявки (тикеты), реконструированные из переписки;
+- метрики: динамика, нагрузка по часам, время первого ответа (SLA), время
+  решения, повторные обращения, аномалии, лидерборд операторов, категории.
 
-Никаких записей в БД приложение не делает — только `SELECT` (read-only).
+Работают две базы. Дамп ejabberd приложение **только читает**; рядом оно
+держит собственную аналитическую БД `temnet_analytics` (создаётся
+автоматически), куда фоновая синхронизация складывает нормализованные
+сообщения и тикеты. Все отчёты и метрики читают уже её — тяжёлая
+нормализация (дедупликация MAM-копий, восстановление автора, сборка тикетов)
+делается один раз при инжесте, а не на каждый запрос.
 
 ## 2. Стек
 
 | Слой | Технологии |
 | --- | --- |
-| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`), MariaDB JDBC, Gradle (toolchain JDK 25) |
+| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`/`JdbcTemplate`), MariaDB JDBC, Caffeine (кэш метрик), Anthropic Java SDK (LLM-классификация reopen'ов), Gradle (toolchain JDK 25) |
 | Frontend | React 19, Vite 5, TypeScript, Ant Design 5, TanStack Query, Apache ECharts, React Router, dayjs, ExcelJS |
-| БД | MariaDB (схема ejabberd) |
+| БД | MariaDB: схема ejabberd (источник) + `temnet_analytics` (своя) |
 
 DTO на бэкенде — **Java records** (Lombok не используется). SQL вынесен в
 ресурсы и грузится в рантайме.
@@ -51,20 +58,22 @@ temnet_parser_2.0/
 │  ├─ db/                              схема + сид-данные для локальной проверки
 │  └─ src/
 │     ├─ main/java/com/temnet/temnet_parser/
-│     │  ├─ Application.java           точка входа
-│     │  ├─ config/WebConfig.java      CORS
-│     │  ├─ controller/                HTTP-слой (5 контроллеров)
-│     │  ├─ service/                   бизнес-логика (5 сервисов)
+│     │  ├─ Application.java           точка входа (@EnableScheduling)
+│     │  ├─ config/                    CORS, второй DataSource для аналитики
+│     │  ├─ analytics/                 синхронизация, тикеты, LLM, /admin/sync
+│     │  ├─ controller/                HTTP-слой
+│     │  ├─ service/                   бизнес-логика
 │     │  ├─ repository/                доступ к данным через JdbcClient
 │     │  ├─ dto/                       records (DTO + enum Bucket)
-│     │  └─ support/                   SqlLoader, CategoryRules
+│     │  └─ support/                   SqlLoader, CategoryRules, BusinessTime
 │     ├─ main/resources/
-│     │  ├─ application.properties     конфиг БД/CORS (через env)
-│     │  └─ sql/                       все SQL-запросы (*.sql)
+│     │  ├─ application.properties     конфиг БД/CORS/sync/LLM (через env)
+│     │  ├─ analytics/schema.sql       схема аналитической БД
+│     │  └─ sql/                       SQL-запросы метрик (*.sql)
 │     └─ test/java/...                 ApplicationTests (context load)
 ├─ frontend-react/                     React-приложение (Vite dev на 5173)
 │  └─ src/
-│     ├─ main.tsx, App.tsx             bootstrap + роутинг
+│     ├─ main.tsx, App.tsx             bootstrap + роутинг + тема
 │     ├─ api/                          client, query-хуки, типы
 │     ├─ components/                   AppLayout, EChart
 │     ├─ lib/                          date, excel, format
@@ -73,49 +82,103 @@ temnet_parser_2.0/
 └─ docs/                               эта документация
 ```
 
-## 4. Модель данных (ejabberd)
+## 4. Модель данных
 
-Используются три таблицы:
+### Источник (дамп ejabberd)
 
 | Таблица | Колонки (используемые) | Смысл |
 | --- | --- | --- |
-| `archive` | `username`, `peer`, `txt`, `created_at` | сообщение: кто (`username`), кому (`peer`, JID), текст, время |
-| `sr_group` | `name` | группа/компания |
+| `archive` | `id`, `username`, `peer`, `bare_peer`, `txt`, `created_at`, `xml` | сообщение: владелец архива, вторая сторона, текст, время, исходная станза |
 | `sr_user` | `jid`, `grp` | принадлежность JID к группе |
 
-**Двойное хранение MAM.** ejabberd хранит каждое сообщение дважды — по копии в
-архиве каждого участника, с переставленными `username`/`peer`. Поэтому
+**Двойное хранение MAM.** ejabberd хранит каждое сообщение дважды — по копии
+в архиве каждого участника, с переставленными `username`/`peer`. Поэтому
 `username` — владелец архива, а не автор. Автор восстанавливается по `peer`
-(у копии получателя он с ресурсом). Подробности и влияние на метрики — в
-[METRICS.md](METRICS.md).
+(у копии получателя он с ресурсом). Копии склеиваются по **stanza id** из
+колонки `xml` — он у обеих копий одинаковый, тогда как `created_at` копий
+может отличаться на секунду (копии пишутся с разницей в миллисекунды, иногда
+через границу секунды).
 
-**Производные понятия** (используются во всех аналитических запросах):
+### Аналитическая БД (`temnet_analytics`)
 
-- **Локальная часть JID** — `SUBSTRING_INDEX(jid, '@', 1)` (имя до `@`).
-- **Оператор** — аккаунт поддержки; `username` начинается с `help`
-  (`help`, `helpm`, `help-dnk`, …). Во всех запросах используется префикс
-  `LIKE 'help%'`.
-- **Клиент (`user_key`)** — не-help сторона диалога.
-- **Направление (`direction`)** — `in` (написал клиент) / `out` (ответил оператор).
-- **Обращение/сессия** — группа сообщений клиента в одном диалоге, разделённых
-  паузой не более 15 минут (см. категоризацию в METRICS.md).
+Схема — [`analytics/schema.sql`](../backend/temnet_parser_2.0/src/main/resources/analytics/schema.sql),
+создаётся при старте, стейтменты идемпотентны.
 
-## 5. Backend
+| Таблица | Смысл |
+| --- | --- |
+| `message` | одна строка на реальное сообщение диалога клиент ↔ поддержка: копии склеены (`dedup_hash`, UNIQUE), автор восстановлен, служебные строки отброшены |
+| `ticket` | заявка, собранная стейт-машиной инжеста: `open` → `closed`/`rejected` (фраза оператора) или `expired` (клиент замолчал); FRT и время решения — в рабочих секундах, посчитаны при инжесте |
+| `llm_verdict` | вердикты LLM по спорным reopen-кандидатам; ключ — (client, opened_at), поэтому полный пересбор не переплачивает за уже решённые случаи |
+| `client_group` | членство клиентов в группах, копия `sr_user` |
+| `sync_state` | вотермарка (`last_archive_id`), время последнего прогона |
+
+**Производные понятия:**
+
+- **Локальная часть JID** — имя до `@`.
+- **Оператор** — аккаунт поддержки; имя начинается с префикса `help`
+  (`help`, `helpm`, `help-dnk`, …), настраивается `OPERATOR_PREFIX`.
+- **Клиент** — не-help сторона диалога.
+- **Направление** — `in` (написал клиент) / `out` (ответил оператор).
+- **Рабочее время** — Пн–Пт 08:00–18:00; все интервалы time-метрик считаются
+  в рабочих секундах (`BusinessTime`).
+
+## 5. Синхронизация и тикеты
+
+Центральный класс — [`AnalyticsSyncService`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/analytics/AnalyticsSyncService.java).
+Запускается по расписанию (задержка 30 сек после старта, далее каждые 5 минут)
+и вручную через `POST /admin/sync`.
+
+**Инкрементальность.** Дамп обновляется переимпортом продовой базы, `archive.id`
+при этом монотонно растёт — синхронизация идёт батчами по вотермарке id. Если
+дамп заменили на другой/старый (max id меньше вотермарки) — полный пересбор.
+Пересбор можно вызвать и руками: `POST /admin/sync/rebuild`.
+
+**Нормализация** (`normalize`): служебные MAM-строки (пустой `txt`) и
+диалоги не-с-поддержкой отбрасываются; автор восстанавливается по
+`peer`-ресурсу; обе MAM-копии сообщения схлопываются ключом
+SHA-1(client, author, stanza id, txt) — stanza id извлекается из
+токен-кодированного `xml` архива, при неудаче фолбэк на `created_at`.
+Вставка `INSERT IGNORE` по UNIQUE-ключу, дальше в обработку идут только
+реально новые строки.
+
+**Стейт-машина тикетов** (на клиента, сообщения в хронологическом порядке):
+
+- сообщение клиента открывает заявку — кроме короткого «спасибо» в течение
+  4 рабочих часов после закрытия предыдущей;
+- фраза оператора «закрыта заявка» / «заявка отклонена» закрывает её
+  (статус `closed`/`rejected`), «заявка в работе» ставит отметку
+  `in_progress_at`;
+- тишина дольше 20 рабочих часов истекает открытую заявку (`expired`);
+- заявка, открытая в течение 10 рабочих часов после закрытия предыдущей, —
+  кандидат в **повторные**: маркерные слова («опять», «не помогло», …) дают
+  +2 балла, совпадение категории +1; при нуле баллов кандидат помечается
+  `reopen_llm = 'pending'` и уходит на LLM-классификацию.
+
+**LLM-классификация** ([`LlmReopenClassifier`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java)):
+спорным кандидатам модель (по умолчанию `claude-haiku-4-5`) отвечает
+SAME/NEW по текстам старой и новой заявки. Без `ANTHROPIC_API_KEY` шаг
+выключен. Запросы идут с темпом `app.llm.requests-per-minute` (по умолчанию
+5/мин — лимит бесплатного тарифа Anthropic) и не больше
+`app.llm.max-per-sync` (20) за прогон, чтобы LLM-часть укладывалась в
+5-минутный интервал синхронизации; остальное дорешивается в следующих
+прогонах. Вердикты кэшируются в `llm_verdict`.
+
+## 6. Backend
 
 ### Слои
 
 Запрос проходит строго через три слоя:
 
 ```
-HTTP → Controller → Service → Repository → (JdbcClient) → MariaDB
+HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analytics
 ```
 
 - **Controller** (`controller/`) — только HTTP: парсинг параметров
   (`@RequestParam`, даты `@DateTimeFormat(iso = DATE)` → `LocalDate`),
   возврат DTO. Тонкий, без логики.
-- **Service** (`service/`) — бизнес-логика и валидация (например
-  `ChatService.participants` — distinct отправителей без `help`;
-  `MetricsService` проверяет диапазон дат).
+- **Service** (`service/`) — бизнес-логика и валидация; результаты метрик
+  кэшируются (`@Cacheable`, Caffeine, TTL 10 мин — сброс после каждого sync
+  с новыми данными).
 - **Repository** (`repository/`) — доступ к данным: грузит SQL, биндит
   параметры через `JdbcClient`, маппит результат в record через
   `DataClassRowMapper`.
@@ -128,68 +191,74 @@ HTTP → Controller → Service → Repository → (JdbcClient) → MariaDB
 | `CompanyController` | `GET /companies` |
 | `UserStatsController` | `GET /users` |
 | `ChatController` | `GET /chat`, `GET /chat/chatlist` |
-| `MetricsController` | `GET /metrics/{timeseries,heatmap,sla,operators,categories}` |
+| `MetricsController` | `GET /metrics/{timeseries,heatmap,sla,resolution,reopens,alerts,categories,operators}` |
+| `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` |
 
 ### DTO (`dto/`)
 
 Все — records: `Group`, `Company`, `UserStat`, `ChatMessage`, `MetricPoint`,
-`HeatmapCell`, `SlaPoint`, `OperatorStat`, `CategoryCount`, и enum `Bucket`
+`HeatmapCell`, `SlaPoint`, `ResolutionPoint`, `ReopenPoint`, `Alert`,
+`AlertsReport`, `OperatorStat`, `CategoryCount`, и enum `Bucket`
 (day/week/month). Маппинг колонок `snake_case` → полей `camelCase` делает
 `DataClassRowMapper` автоматически (`user_name` → `userName`).
 
 ### Работа с SQL
 
-- Все запросы лежат в `resources/sql/*.sql` и грузятся один раз в статическое
-  поле репозитория через [`SqlLoader`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java)
-  (`ClassPathResource.getContentAsString`).
-- **Параметры** биндятся по имени: `:start`, `:end`, `:groupName`,
-  `:username`, `:sessionGapSeconds`, `:maxFrtSeconds` и т.п. — защита от
-  инъекций.
-- **Динамические фрагменты** SQL (которые нельзя передать параметром —
-  выражение гранулярности, опциональный фильтр группы, CASE категоризации)
-  собираются в коде и подставляются по плейсхолдерам `${...}`
-  (`${bucket}`, `${groupFilter}`, `${rankCase}`, `${rankToName}`,
-  `${categoryCase}`). **Эти фрагменты строятся только из значений,
-  контролируемых кодом** (enum `Bucket`, словарь `CategoryRules`), а
-  пользовательские значения всегда идут через bound-параметры — инъекций нет.
+- Запросы метрик лежат в `resources/sql/*.sql` и грузятся один раз в
+  статическое поле репозитория через [`SqlLoader`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java).
+- **Параметры** биндятся по имени: `:start`, `:endExclusive`, `:groupName`,
+  `:maxFrtSeconds` и т.п. — защита от инъекций.
+- **Динамические фрагменты** SQL (выражение гранулярности, опциональный
+  фильтр группы) собираются в коде и подставляются по плейсхолдерам
+  `${...}`. **Эти фрагменты строятся только из значений, контролируемых
+  кодом** (enum `Bucket`), а пользовательские значения всегда идут через
+  bound-параметры — инъекций нет.
 
 Ключевые support-классы:
 
 - [`SqlLoader`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java) — загрузка SQL из classpath.
-- [`CategoryRules`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений и генерация
-  `CASE`-выражений (ранг + ранг→имя).
+- [`CategoryRules`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений (ранг + имя).
+- [`BusinessTime`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/BusinessTime.java) — рабочие секунды между двумя моментами.
 - [`Bucket`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/dto/Bucket.java) — гранулярность времени; хранит SQL-шаблон усечения даты.
 
 ### Конфигурация
 
-[`application.properties`](../backend/temnet_parser_2.0/src/main/resources/application.properties) — подключение и пул читаются из env с дефолтами:
+[`application.properties`](../backend/temnet_parser_2.0/src/main/resources/application.properties) — всё читается из env с дефолтами:
 
 ```properties
 spring.datasource.url=${DB_URL:jdbc:mariadb://localhost:3306/ejabberd}
-spring.datasource.username=${DB_USER:root}
-spring.datasource.password=${DB_PASSWORD:root}
-spring.datasource.hikari.maximum-pool-size=${DB_POOL_SIZE:10}
+app.analytics.url=${ANALYTICS_DB_URL:jdbc:mariadb://localhost:3306/temnet_analytics?createDatabaseIfNotExist=true}
+app.sync.interval=${SYNC_INTERVAL:PT5M}
+app.operator-prefix=${OPERATOR_PREFIX:help}
+app.llm.api-key=${ANTHROPIC_API_KEY:}
+app.llm.model=${LLM_MODEL:claude-haiku-4-5}
+app.llm.max-per-sync=${LLM_MAX_PER_SYNC:20}
+app.llm.requests-per-minute=${LLM_RPM:5}
 app.cors.allowed-origin=${CORS_ORIGIN:http://localhost:5173}
+spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize=500
 ```
 
-- Пул соединений — **HikariCP** (дефолт Spring Boot).
-- **CORS** — единый [`WebConfig`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java) (`allowedOrigins` из `app.cors.allowed-origin`,
-  только `GET`).
+- Пул соединений — **HikariCP** (дефолт Spring Boot), для аналитики —
+  отдельный DataSource.
+- **CORS** — единый [`WebConfig`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java) (`allowedOrigins` из `app.cors.allowed-origin`).
+- **Кэш метрик** — Caffeine, ответы кэшируются по комбинации параметров;
+  после sync с новыми данными кэши чистятся.
 
-## 6. Frontend
+## 7. Frontend
 
 ### Точка входа и роутинг
 
 - [`main.tsx`](../frontend-react/src/main.tsx) — поднимает `QueryClientProvider`
   (TanStack Query), `ConfigProvider` (Ant Design, локаль ru), `BrowserRouter`.
 - [`App.tsx`](../frontend-react/src/App.tsx) — маршруты внутри общего
-  `AppLayout`. Страница метрик грузится **лениво** (`React.lazy`), чтобы
-  тяжёлый бандл ECharts подтягивался только на `/metrics`.
+  `AppLayout`, переключатель светлой/тёмной темы. Страница метрик грузится
+  **лениво** (`React.lazy`), чтобы тяжёлый бандл ECharts подтягивался только
+  на `/metrics`.
 
 | Маршрут | Страница |
 | --- | --- |
 | `/chat` | `ChatPage` — история переписки |
-| `/metrics` | `MetricsPage` — динамика, SLA, хитмап, категории (ECharts) |
+| `/metrics` | `MetricsPage` — динамика, SLA, время решения, reopens, аномалии, хитмап, категории (ECharts) + сводный Excel-отчёт |
 | `/companies` | `CompaniesPage` — статистика компаний |
 | `/users` | `UsersPage` — статистика пользователей |
 | `/operators` | `OperatorsPage` — лидерборд операторов |
@@ -223,7 +292,7 @@ Page → use*-хук (TanStack Query) → api.client → fetch → backend
      → данные кэшируются по ключу → useMemo строит EChartsOption / колонки таблицы
 ```
 
-## 7. Сборка и запуск
+## 8. Сборка и запуск
 
 **Требования:** JDK 25 (для бэка), Node 18+ (для фронта), MariaDB с базой
 `ejabberd`. Тестовая схема и данные — в
@@ -243,12 +312,12 @@ cd backend/temnet_parser_2.0 && ./gradlew bootRun
 cd frontend-react && npm install && npm run build   # tsc + vite build → dist/
 ```
 
-## 8. Соглашения
+## 9. Соглашения
 
 - **Слои не перепрыгиваются**: контроллер не ходит в репозиторий напрямую.
 - **SQL — в ресурсах**, не в коде; параметры — именованные; динамические
   фрагменты — только из code-controlled значений.
 - **Даты** на границе API — `LocalDate` (ISO `yyyy-MM-dd`); внутри запросов
-  конец периода трактуется по-разному в базовых отчётах и в метриках — см.
-  [METRICS.md](METRICS.md).
-- **Идентификатор оператора** — везде префикс `username LIKE 'help%'`.
+  везде полуинтервал `[start, end+1день)` — конечный день включён целиком.
+- **Идентификатор оператора** — префикс имени (`help` по умолчанию).
+- **Время в time-метриках** — рабочие секунды (Пн–Пт 08:00–18:00).
