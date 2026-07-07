@@ -89,8 +89,10 @@ public class MetricsRepository {
     public List<SlaPoint> sla(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
         boolean hasGroup = hasGroup(groupName);
 
+        String anchor = nextWorkingDay("t.opened_at");
         String sql = SLA_SQL
-                .replace("${bucket}", bucket.expression("t.opened_at"))
+                .replace("${bucket}", bucket.expression(anchor))
+                .replace("${anchor}", anchor)
                 .replace("${groupFilter}", clientInGroup("t", hasGroup));
 
         return withRange(sql, start, end, hasGroup ? groupName : null)
@@ -102,8 +104,10 @@ public class MetricsRepository {
     public List<ResolutionPoint> resolution(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
         boolean hasGroup = hasGroup(groupName);
 
+        String anchor = nextWorkingDay("t.closed_at");
         String sql = RESOLUTION_SQL
-                .replace("${bucket}", bucket.expression("t.closed_at"))
+                .replace("${bucket}", bucket.expression(anchor))
+                .replace("${anchor}", anchor)
                 .replace("${groupFilter}", clientInGroup("t", hasGroup));
 
         return withRange(sql, start, end, hasGroup ? groupName : null)
@@ -251,6 +255,19 @@ public class MetricsRepository {
         return "AND EXISTS (SELECT 1 FROM client_group cg WHERE cg.client = " + alias
                 + ".client AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all'"
                 + (hasGroup ? " AND cg.grp = :groupName" : "") + ")";
+    }
+
+    /**
+     * The given datetime column shifted off weekends to the next Monday.
+     * Weekends are officially non-working (see BusinessTime), so a ticket
+     * opened or closed on Saturday/Sunday belongs to the working day where
+     * its working time actually runs; otherwise the tiny weekend samples
+     * (Monday-queue waits and week-spillover closures) show up as misleading
+     * weekend peaks on the time charts.
+     */
+    private static String nextWorkingDay(String column) {
+        return "(" + column + " + INTERVAL (CASE WEEKDAY(" + column
+                + ") WHEN 5 THEN 2 WHEN 6 THEN 1 ELSE 0 END) DAY)";
     }
 
     /** Optional group filter for ticket-level queries. */
