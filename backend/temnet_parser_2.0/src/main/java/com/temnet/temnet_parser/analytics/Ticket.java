@@ -22,6 +22,7 @@ class Ticket {
     int messagesOut;
     Long reopenedFrom;
     int reopenScore;
+    String reopenLlm;
 
     Ticket(String client, LocalDateTime openedAt) {
         this.client = client;

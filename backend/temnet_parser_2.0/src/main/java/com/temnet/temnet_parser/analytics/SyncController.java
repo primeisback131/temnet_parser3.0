@@ -49,7 +49,10 @@ public class SyncController {
                 analytics.queryForList("SELECT status, COUNT(*) AS count FROM ticket GROUP BY status");
         result.put("tickets", tickets);
         result.put("reopens", analytics.queryForObject(
-                "SELECT COUNT(*) FROM ticket WHERE reopen_score > 0", Long.class));
+                "SELECT COUNT(*) FROM ticket WHERE reopen_score > 0 OR reopen_llm = 'same'", Long.class));
+        result.put("reopenLlm", analytics.queryForList(
+                "SELECT reopen_llm AS verdict, COUNT(*) AS count FROM ticket"
+                        + " WHERE reopen_llm IS NOT NULL GROUP BY reopen_llm"));
         return result;
     }
 }

@@ -76,6 +76,7 @@ public class AnalyticsSyncService {
     private final NamedParameterJdbcTemplate analyticsNamed;
     private final TransactionTemplate tx;
     private final CacheManager cacheManager;
+    private final LlmReopenClassifier llmClassifier;
     private final String operatorPrefix;
 
     public AnalyticsSyncService(
@@ -83,17 +84,19 @@ public class AnalyticsSyncService {
             @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics,
             JdbcTransactionManager analyticsTxManager,
             CacheManager cacheManager,
+            LlmReopenClassifier llmClassifier,
             @Value("${app.operator-prefix:help}") String operatorPrefix) {
         this.source = source;
         this.analytics = analytics;
         this.analyticsNamed = new NamedParameterJdbcTemplate(analytics);
         this.tx = new TransactionTemplate(analyticsTxManager);
         this.cacheManager = cacheManager;
+        this.llmClassifier = llmClassifier;
         this.operatorPrefix = operatorPrefix;
     }
 
-    public record SyncSummary(boolean fullRebuild, long scannedRows, long newMessages, long watermark,
-                              long durationMs) {
+    public record SyncSummary(boolean fullRebuild, long scannedRows, long newMessages, long llmClassified,
+                              long watermark, long durationMs) {
     }
 
     /** A normalized message of a client <-> support conversation. */
@@ -169,10 +172,11 @@ public class AnalyticsSyncService {
         }
 
         syncGroups();
+        int llmClassified = llmClassifier.classifyPending();
         analytics.update(
                 "UPDATE sync_state SET last_run_at = NOW(), messages_total = (SELECT COUNT(*) FROM message m) WHERE id = 1");
 
-        if (full || inserted > 0) {
+        if (full || inserted > 0 || llmClassified > 0) {
             // Metric responses are cached; new data must show up immediately.
             for (String name : cacheManager.getCacheNames()) {
                 Cache cache = cacheManager.getCache(name);
@@ -182,8 +186,8 @@ public class AnalyticsSyncService {
             }
         }
 
-        SyncSummary summary =
-                new SyncSummary(full, scanned, inserted, watermark, System.currentTimeMillis() - startedAt);
+        SyncSummary summary = new SyncSummary(full, scanned, inserted, llmClassified, watermark,
+                System.currentTimeMillis() - startedAt);
         log.info("Sync done: {}", summary);
         return summary;
     }
@@ -378,9 +382,11 @@ public class AnalyticsSyncService {
                         && ticket.categoryRank != CategoryRules.otherRank()) {
                     score += 1;
                 }
-                if (score > 0) {
-                    ticket.reopenedFrom = st.lastClosed.id;
-                    ticket.reopenScore = score;
+                ticket.reopenedFrom = st.lastClosed.id;
+                ticket.reopenScore = score;
+                if (score == 0) {
+                    // No heuristic signal — an ambiguous candidate for the LLM.
+                    ticket.reopenLlm = "pending";
                 }
             }
             insert(ticket);
@@ -437,7 +443,7 @@ public class AnalyticsSyncService {
             List<Ticket> found = analytics.query(
                     "SELECT id, client, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
                             + " in_progress_at, closed_at, closed_by, resolution_seconds, status, category_rank,"
-                            + " messages_in, messages_out, reopened_from, reopen_score"
+                            + " messages_in, messages_out, reopened_from, reopen_score, reopen_llm"
                             + " FROM ticket WHERE client = ? AND " + statusFilter
                             + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
                     (rs, i) -> {
@@ -460,6 +466,7 @@ public class AnalyticsSyncService {
                         long reopenedFrom = rs.getLong("reopened_from");
                         t.reopenedFrom = rs.wasNull() ? null : reopenedFrom;
                         t.reopenScore = rs.getInt("reopen_score");
+                        t.reopenLlm = rs.getString("reopen_llm");
                         return t;
                     },
                     client);
@@ -473,8 +480,8 @@ public class AnalyticsSyncService {
                                 INSERT INTO ticket (client, opened_at, last_activity, first_response_at, first_responder,
                                                     frt_seconds, in_progress_at, closed_at, closed_by, resolution_seconds,
                                                     status, category, category_rank, messages_in, messages_out,
-                                                    reopened_from, reopen_score)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                    reopened_from, reopen_score, reopen_llm)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -489,7 +496,8 @@ public class AnalyticsSyncService {
                                 UPDATE ticket SET last_activity = ?, first_response_at = ?, first_responder = ?,
                                                   frt_seconds = ?, in_progress_at = ?, closed_at = ?, closed_by = ?,
                                                   resolution_seconds = ?, status = ?, category = ?, category_rank = ?,
-                                                  messages_in = ?, messages_out = ?, reopened_from = ?, reopen_score = ?
+                                                  messages_in = ?, messages_out = ?, reopened_from = ?, reopen_score = ?,
+                                                  reopen_llm = ?
                                 WHERE id = ?
                                 """,
                         Timestamp.valueOf(t.lastActivity),
@@ -507,6 +515,7 @@ public class AnalyticsSyncService {
                         t.messagesOut,
                         t.reopenedFrom,
                         t.reopenScore,
+                        t.reopenLlm,
                         t.id);
             }
             dirty.clear();
@@ -530,6 +539,7 @@ public class AnalyticsSyncService {
             ps.setInt(15, t.messagesOut);
             setNullableLong(ps, 16, t.reopenedFrom);
             ps.setInt(17, t.reopenScore);
+            ps.setString(18, t.reopenLlm);
         }
 
         private void setNullableLong(PreparedStatement ps, int index, Long value) throws java.sql.SQLException {

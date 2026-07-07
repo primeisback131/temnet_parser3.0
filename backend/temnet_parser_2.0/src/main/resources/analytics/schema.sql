@@ -66,6 +66,22 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS first_responder VARCHAR(191) NULL AF
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS frt_seconds BIGINT NULL AFTER first_responder;
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resolution_seconds BIGINT NULL AFTER closed_by;
 
+-- LLM verdict for ambiguous reopen candidates (no marker words, different
+-- category): 'pending' -> awaiting classification, 'same' -> confirmed the
+-- same issue, 'new' -> a different issue. NULL for non-candidates and for
+-- candidates already decided by the heuristics.
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS reopen_llm VARCHAR(10) NULL AFTER reopen_score;
+ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_reopen_llm (reopen_llm);
+
+-- LLM verdicts keyed by the ticket's natural identity, so a full rebuild
+-- (which truncates `ticket`) never re-pays for already-classified cases.
+CREATE TABLE IF NOT EXISTS llm_verdict (
+    client    VARCHAR(191) NOT NULL,
+    opened_at DATETIME NOT NULL,
+    verdict   VARCHAR(10) NOT NULL,
+    PRIMARY KEY (client, opened_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Group membership copied from the dump (sr_user), so analytics queries never
 -- need the source DB.
 CREATE TABLE IF NOT EXISTS client_group (
