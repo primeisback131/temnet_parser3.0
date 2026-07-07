@@ -33,7 +33,6 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -46,9 +45,10 @@ import java.util.regex.Pattern;
  * or different one (max id below the watermark), everything is rebuilt from
  * scratch. Runs on a schedule and via POST /admin/sync.
  *
- * Per message: MAM double copies are collapsed by the stanza id extracted
- * from the archived XML (both copies carry the same id; their created_at can
- * differ by a second, so time is only a fallback key), then a per-client state
+ * Per message: the two MAM copies are collapsed into one by the stanza id
+ * extracted from the archived XML, and the author is the owner of the pair's
+ * FIRST row — the server archives the sender's copy before the recipient's
+ * (verified on the whole dump). Then a per-client state
  * machine maintains tickets: a client message opens a ticket (unless it is a
  * short "thanks" right after a closure), an operator closure phrase closes
  * it, long silence expires it, and a quick return after a closure is scored
@@ -60,6 +60,12 @@ public class AnalyticsSyncService {
     private static final Logger log = LoggerFactory.getLogger(AnalyticsSyncService.class);
 
     private static final int BATCH_SIZE = 20_000;
+
+    // The two MAM copies of one message are written microseconds apart and sit
+    // within ~17 ids of each other on real data. The margin keeps a full batch
+    // from splitting a pair; the window separates twins from reused stanza ids.
+    private static final int TWIN_MARGIN = 32;
+    private static final long TWIN_WINDOW_MICROS = 1_000_000;
 
     // Windows in WORKING seconds (08:00-18:00 Mon-Fri, see BusinessTime).
     private static final long ACK_WINDOW_SECONDS = 4 * 3600;     // "спасибо" after a closure
@@ -103,6 +109,11 @@ public class AnalyticsSyncService {
     /** A normalized message of a client <-> support conversation. */
     private record Msg(long sourceId, String client, String author, String recipient, boolean inbound, String txt,
                        LocalDateTime createdAt, byte[] hash) {
+    }
+
+    /** A raw archive row: authorship and support-ness not yet resolved. */
+    private record Raw(long id, String owner, String peer, String barePeer, String txt,
+                       LocalDateTime createdAt, long tsMicros, String stanzaId) {
     }
 
     @PostConstruct
@@ -150,22 +161,21 @@ public class AnalyticsSyncService {
         long inserted = 0;
 
         while (true) {
-            long batchStartWatermark = watermark;
-            List<Msg> batch = fetchBatch(batchStartWatermark);
+            List<Raw> batch = fetchBatch(watermark);
             if (batch.isEmpty()) {
-                long lastId = lastScannedId(batchStartWatermark);
-                if (lastId > watermark) { // rows existed but none were support messages
-                    watermark = lastId;
-                    analytics.update("UPDATE sync_state SET last_archive_id = ? WHERE id = 1", watermark);
-                    continue;
-                }
                 break;
             }
+            if (batch.size() == BATCH_SIZE) {
+                // Trim a tail margin off full batches so a twin pair never
+                // splits across two batches; the tail returns with the next one.
+                batch = batch.subList(0, BATCH_SIZE - TWIN_MARGIN);
+            }
             scanned += batch.size();
-            long newWatermark = batch.get(batch.size() - 1).sourceId();
+            long newWatermark = batch.get(batch.size() - 1).id();
+            List<Msg> messages = normalizePairs(batch);
 
             inserted += tx.execute(status -> {
-                long fresh = insertAndProcess(batch, engine);
+                long fresh = insertAndProcess(messages, engine);
                 analytics.update("UPDATE sync_state SET last_archive_id = ? WHERE id = 1", newWatermark);
                 return fresh;
             });
@@ -193,66 +203,87 @@ public class AnalyticsSyncService {
         return summary;
     }
 
-    /** Next batch of support-conversation messages after the watermark, normalized. */
-    private List<Msg> fetchBatch(long watermark) {
+    /** Next batch of raw archive rows after the watermark, oldest first. */
+    private List<Raw> fetchBatch(long watermark) {
         return source.sql("""
-                        SELECT id, username, peer, bare_peer, txt, created_at, xml
+                        SELECT id, username, peer, bare_peer, txt, created_at, timestamp, xml
                         FROM archive
                         WHERE id > :watermark AND txt IS NOT NULL
                         ORDER BY id
                         LIMIT %d
                         """.formatted(BATCH_SIZE))
                 .param("watermark", watermark)
-                .query((rs, i) -> normalize(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        rs.getString(5), rs.getTimestamp(6).toLocalDateTime(), rs.getBytes(7)))
-                .list()
-                .stream()
-                .filter(Objects::nonNull)
-                .toList();
+                .query((rs, i) -> new Raw(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5).strip(), rs.getTimestamp(6).toLocalDateTime(), rs.getLong(7),
+                        stanzaId(rs.getBytes(8))))
+                .list();
     }
 
     /**
-     * Highest archive id within the next batch window, so the watermark still
-     * advances through stretches of non-support rows.
+     * Collapses the two MAM copies of each message into one and resolves the
+     * author: the server archives the sender's copy before the recipient's,
+     * so within a twin pair — same stanza id, same text, written microseconds
+     * apart — the first row's owner is the author (verified on the whole
+     * dump: 92502/92502 checkable pairs). Rows without a twin fall back to
+     * the per-row resource heuristic; it cannot tell the sides apart when
+     * both copies carry a peer resource, which is how mirrored in/out
+     * duplicates used to appear.
      */
-    private long lastScannedId(long watermark) {
-        Long id = source.sql("""
-                        SELECT MAX(id) FROM (
-                            SELECT id FROM archive WHERE id > :watermark ORDER BY id LIMIT %d
-                        ) AS window_rows
-                        """.formatted(BATCH_SIZE))
-                .param("watermark", watermark)
-                .query((rs, i) -> rs.getObject(1, Long.class))
-                .list()
-                .get(0);
-        return id == null ? watermark : id;
+    private List<Msg> normalizePairs(List<Raw> batch) {
+        List<Msg> result = new ArrayList<>(batch.size() / 2 + 8);
+        Map<String, Raw> pending = new HashMap<>();
+        for (Raw row : batch) {
+            if (row.txt().isEmpty()) {
+                continue; // MAM service row (receipt / chat marker)
+            }
+            if (row.stanzaId() == null) {
+                addIfSupport(result, singleton(row));
+                continue;
+            }
+            Raw first = pending.get(row.stanzaId());
+            if (first != null && first.txt().equals(row.txt())
+                    && row.tsMicros() - first.tsMicros() < TWIN_WINDOW_MICROS) {
+                pending.remove(row.stanzaId());
+                addIfSupport(result, message(first.id(), first.owner(), local(first.barePeer()),
+                        first.txt(), first.createdAt(), first.stanzaId()));
+            } else {
+                Raw replaced = pending.put(row.stanzaId(), row);
+                if (replaced != null) {
+                    addIfSupport(result, singleton(replaced)); // stanza id reused by a later message
+                }
+            }
+        }
+        for (Raw leftover : pending.values()) {
+            addIfSupport(result, singleton(leftover));
+        }
+        return result;
     }
 
-    private Msg normalize(long id, String owner, String peer, String barePeer, String rawTxt,
-                          LocalDateTime createdAt, byte[] xml) {
-        String txt = rawTxt.strip();
-        if (txt.isEmpty()) {
-            return null; // MAM service row (receipt / chat marker)
+    private static void addIfSupport(List<Msg> result, Msg msg) {
+        if (msg != null) {
+            result.add(msg);
         }
-        String peerLocal = local(barePeer);
-        boolean ownerIsOp = owner.startsWith(operatorPrefix);
-        boolean peerIsOp = peerLocal.startsWith(operatorPrefix);
-        if (ownerIsOp == peerIsOp) {
+    }
+
+    /** A row without a twin in the batch: the author comes from the resource heuristic. */
+    private Msg singleton(Raw row) {
+        // The recipient's copy carries the sender's full jid with a /resource;
+        // the sender's copy usually has a bare peer.
+        String author = row.peer().contains("/") ? local(row.peer()) : row.owner();
+        String counterpart = author.equals(row.owner()) ? local(row.barePeer()) : row.owner();
+        return message(row.id(), author, counterpart, row.txt(), row.createdAt(), row.stanzaId());
+    }
+
+    /** Builds the normalized message; null when it is not a client <-> support conversation. */
+    private Msg message(long sourceId, String author, String counterpart, String txt,
+                        LocalDateTime createdAt, String stanzaId) {
+        boolean authorIsOp = author.startsWith(operatorPrefix);
+        if (authorIsOp == counterpart.startsWith(operatorPrefix)) {
             return null; // operator<->operator or client<->client — not a support conversation
         }
-        // The recipient's copy carries the sender's full jid with a /resource;
-        // the sender's copy has a bare peer.
-        String author = peer.contains("/") ? local(peer) : owner;
-        String recipient = author.equals(owner) ? peerLocal : owner;
-        String client = ownerIsOp ? peerLocal : owner;
-        boolean inbound = !author.startsWith(operatorPrefix);
-        // Both MAM copies of one stanza share its id, while their created_at
-        // can differ by a second (the copies are written milliseconds apart,
-        // sometimes across a second boundary) — so the id is the dedup key
-        // and the timestamp only a fallback for stanzas without one.
-        String stanzaId = stanzaId(xml);
-        return new Msg(id, client, author, recipient, inbound, txt, createdAt,
-                dedupHash(client, author, txt, stanzaId != null ? stanzaId : createdAt.toString()));
+        String client = authorIsOp ? counterpart : author;
+        return new Msg(sourceId, client, author, counterpart, !authorIsOp, txt, createdAt,
+                dedupHash(client, txt, stanzaId != null ? stanzaId : createdAt.toString()));
     }
 
     /**
@@ -285,6 +316,9 @@ public class AnalyticsSyncService {
      * update, so a crash never double-processes a message.
      */
     private long insertAndProcess(List<Msg> batch, TicketEngine engine) {
+        if (batch.isEmpty()) {
+            return 0;
+        }
         analytics.batchUpdate("""
                         INSERT IGNORE INTO message (source_id, client, author, recipient, direction, txt, created_at, dedup_hash)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -333,12 +367,16 @@ public class AnalyticsSyncService {
         return at < 0 ? jid : jid.substring(0, at);
     }
 
-    private static byte[] dedupHash(String client, String author, String txt, String identity) {
+    /**
+     * The author is deliberately NOT part of the key: if a twin pair ever does
+     * split (dump grows mid-sync) and the copies resolve to different authors,
+     * the second copy must still collide with the first instead of inserting
+     * a mirrored duplicate.
+     */
+    private static byte[] dedupHash(String client, String txt, String identity) {
         try {
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
             sha1.update(client.getBytes(StandardCharsets.UTF_8));
-            sha1.update((byte) 0);
-            sha1.update(author.getBytes(StandardCharsets.UTF_8));
             sha1.update((byte) 0);
             sha1.update(identity.getBytes(StandardCharsets.UTF_8));
             sha1.update((byte) 0);
