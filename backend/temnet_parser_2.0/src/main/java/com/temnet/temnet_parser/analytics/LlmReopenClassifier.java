@@ -12,6 +12,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.ProxySelector;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -70,9 +72,7 @@ public class LlmReopenClassifier {
     private final long minCallIntervalMillis;
     private long earliestNextCallAt = 0;
 
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+    private final HttpClient http;
     private final JsonMapper json = JsonMapper.builder().build();
 
     public LlmReopenClassifier(
@@ -81,7 +81,8 @@ public class LlmReopenClassifier {
             @Value("${app.llm.api-key:}") String apiKey,
             @Value("${app.llm.model:gemini-flash-latest}") String model,
             @Value("${app.llm.max-per-sync:20}") int maxPerSync,
-            @Value("${app.llm.requests-per-minute:5}") int requestsPerMinute) {
+            @Value("${app.llm.requests-per-minute:5}") int requestsPerMinute,
+            @Value("${app.llm.proxy:}") String proxy) {
         this.analytics = analytics;
         this.apiKey = apiKey;
         this.model = model;
@@ -90,8 +91,23 @@ public class LlmReopenClassifier {
         this.chatCompletionsUrl = baseUrl == null || baseUrl.isBlank()
                 ? null
                 : baseUrl.replaceAll("/+$", "") + "/chat/completions";
+
+        // Some providers (Groq among them) are unreachable from some regions,
+        // and the JDK http client ignores the Windows system proxy — so the
+        // proxy the rest of the machine uses must be configured explicitly.
+        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10));
+        if (proxy != null && !proxy.isBlank()) {
+            int colon = proxy.lastIndexOf(':');
+            builder.proxy(ProxySelector.of(new InetSocketAddress(
+                    proxy.substring(0, colon), Integer.parseInt(proxy.substring(colon + 1)))));
+        }
+        this.http = builder.build();
+
         if (this.chatCompletionsUrl == null) {
             log.info("LLM reopen classification disabled (no app.llm.base-url / LLM_BASE_URL)");
+        } else {
+            log.info("LLM reopen classification enabled: {} at {}{}", model, chatCompletionsUrl,
+                    proxy == null || proxy.isBlank() ? "" : " via proxy " + proxy);
         }
     }
 
