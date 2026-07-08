@@ -1,9 +1,9 @@
 package com.temnet.temnet_parser.analytics;
 
-import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
-import com.anthropic.models.messages.Message;
-import com.anthropic.models.messages.MessageCreateParams;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -11,7 +11,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -22,13 +29,15 @@ import java.util.Map;
  * words and no category match (reopen_llm = 'pending'). The model answers
  * whether the new request is the same issue (SAME) or a different one (NEW).
  *
- * Disabled unless an API key is configured (app.llm.api-key /
- * ANTHROPIC_API_KEY). Verdicts are cached in `llm_verdict` by the ticket's
- * natural identity (client + opened_at), so full rebuilds never re-classify
- * — and re-pay for — already-decided cases. At most
- * {@code app.llm.max-per-sync} API calls per sync run, paced to
- * {@code app.llm.requests-per-minute} (default 5, the Anthropic free-tier
- * limit) so a sync run never trips the rate limiter.
+ * Talks to any OpenAI-compatible chat-completions endpoint — Gemini, Groq,
+ * OpenRouter, Anthropic and self-hosted servers all expose one — selected by
+ * {@code app.llm.base-url} (LLM_BASE_URL). Disabled while the base url is
+ * empty. Verdicts are cached in `llm_verdict` by the ticket's natural
+ * identity (client + opened_at), so full rebuilds never re-classify — and
+ * with a paid provider never re-pay for — already-decided cases. Calls are
+ * paced to {@code app.llm.requests-per-minute} and capped at
+ * {@code app.llm.max-per-sync} per sync run so the LLM step fits inside the
+ * sync interval and free-tier rate limits.
  */
 @Service
 public class LlmReopenClassifier {
@@ -37,6 +46,12 @@ public class LlmReopenClassifier {
 
     /** Max characters of each side's text sent to the model. */
     private static final int MAX_TEXT_CHARS = 600;
+
+    /**
+     * Generous, because "thinking" models spend completion tokens on
+     * reasoning before the one-word answer; the payload is tiny either way.
+     */
+    private static final int MAX_COMPLETION_TOKENS = 1024;
 
     private static final String SYSTEM_PROMPT = """
             Ты — классификатор обращений в службу технической поддержки.
@@ -47,33 +62,41 @@ public class LlmReopenClassifier {
             Ответь строго одним словом: SAME — та же проблема, NEW — другая проблема.""";
 
     private final JdbcTemplate analytics;
+    private final String chatCompletionsUrl; // null when no base url is configured
+    private final String apiKey;
     private final String model;
     private final int maxPerSync;
     /** Minimum spacing between API calls; 0 disables pacing. */
     private final long minCallIntervalMillis;
     private long earliestNextCallAt = 0;
-    private final AnthropicClient client; // null when no API key is configured
+
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
+    private final JsonMapper json = JsonMapper.builder().build();
 
     public LlmReopenClassifier(
             @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics,
+            @Value("${app.llm.base-url:}") String baseUrl,
             @Value("${app.llm.api-key:}") String apiKey,
-            @Value("${app.llm.model:claude-haiku-4-5}") String model,
+            @Value("${app.llm.model:gemini-flash-latest}") String model,
             @Value("${app.llm.max-per-sync:20}") int maxPerSync,
             @Value("${app.llm.requests-per-minute:5}") int requestsPerMinute) {
         this.analytics = analytics;
+        this.apiKey = apiKey;
         this.model = model;
         this.maxPerSync = maxPerSync;
         this.minCallIntervalMillis = requestsPerMinute > 0 ? 60_000L / requestsPerMinute : 0;
-        this.client = apiKey == null || apiKey.isBlank()
+        this.chatCompletionsUrl = baseUrl == null || baseUrl.isBlank()
                 ? null
-                : AnthropicOkHttpClient.builder().apiKey(apiKey).build();
-        if (this.client == null) {
-            log.info("LLM reopen classification disabled (no app.llm.api-key / ANTHROPIC_API_KEY)");
+                : baseUrl.replaceAll("/+$", "") + "/chat/completions";
+        if (this.chatCompletionsUrl == null) {
+            log.info("LLM reopen classification disabled (no app.llm.base-url / LLM_BASE_URL)");
         }
     }
 
     public boolean enabled() {
-        return client != null;
+        return chatCompletionsUrl != null;
     }
 
     private record Candidate(long id, String client, LocalDateTime openedAt,
@@ -82,7 +105,7 @@ public class LlmReopenClassifier {
 
     /** Classifies up to {@code maxPerSync} pending candidates; returns how many were decided. */
     public int classifyPending() {
-        if (client == null) {
+        if (chatCompletionsUrl == null) {
             return 0;
         }
 
@@ -141,9 +164,8 @@ public class LlmReopenClassifier {
 
     /**
      * Blocks until the next API call fits the configured requests-per-minute
-     * budget (free tier: 5/min). Token limits (10K in / 4K out per minute)
-     * are never the binding constraint here: each request is well under 2K
-     * input tokens and 10 output tokens.
+     * budget (free tiers: Gemini 10/min, Groq 30/min; the default 5 is safe
+     * for any of them).
      */
     private void awaitRateLimit() {
         long wait = earliestNextCallAt - System.currentTimeMillis();
@@ -158,27 +180,52 @@ public class LlmReopenClassifier {
         earliestNextCallAt = System.currentTimeMillis() + minCallIntervalMillis;
     }
 
-    private String classify(Candidate candidate) {
+    private String classify(Candidate candidate) throws IOException, InterruptedException {
         String previousTexts = inboundTexts(candidate.client(), candidate.prevOpened(), candidate.prevClosed());
         String newTexts = inboundTexts(candidate.client(), candidate.openedAt(), null);
 
-        awaitRateLimit();
-        Message response = client.messages().create(MessageCreateParams.builder()
-                .model(model)
-                .maxTokens(10L)
-                .system(SYSTEM_PROMPT)
-                .addUserMessage("Предыдущая заявка (закрыта):\n" + previousTexts
-                        + "\n\nНовое обращение:\n" + newTexts)
-                .build());
-
-        String answer = response.content().stream()
-                .flatMap(block -> block.text().stream())
-                .map(text -> text.text())
-                .reduce("", String::concat)
-                .strip()
-                .toUpperCase();
+        String answer = chat("Предыдущая заявка (закрыта):\n" + previousTexts
+                + "\n\nНовое обращение:\n" + newTexts);
         // Anything unparseable counts as NEW: conservative (not a reopen) and final.
-        return answer.startsWith("SAME") ? "same" : "new";
+        return answer.toUpperCase().contains("SAME") ? "same" : "new";
+    }
+
+    /** One OpenAI-compatible chat-completions call; returns the message text. */
+    private String chat(String userText) throws IOException, InterruptedException {
+        ObjectNode body = json.createObjectNode();
+        body.put("model", model);
+        body.put("max_tokens", MAX_COMPLETION_TOKENS);
+        body.put("temperature", 0);
+        ArrayNode messages = body.putArray("messages");
+        messages.addObject().put("role", "system").put("content", SYSTEM_PROMPT);
+        messages.addObject().put("role", "user").put("content", userText);
+
+        HttpRequest.Builder request = HttpRequest.newBuilder()
+                .uri(URI.create(chatCompletionsUrl))
+                .timeout(Duration.ofSeconds(60))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body), StandardCharsets.UTF_8));
+        if (!apiKey.isBlank()) {
+            request.header("Authorization", "Bearer " + apiKey);
+        }
+
+        awaitRateLimit();
+        HttpResponse<String> response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() / 100 != 2) {
+            throw new IllegalStateException("LLM API returned HTTP " + response.statusCode()
+                    + ": " + head(response.body()));
+        }
+        JsonNode content = json.readTree(response.body())
+                .path("choices").path(0).path("message").path("content");
+        if (content.isMissingNode() || content.isNull()) {
+            throw new IllegalStateException("LLM API response has no message content: " + head(response.body()));
+        }
+        return content.asString().strip();
+    }
+
+    private static String head(String body) {
+        String flat = body == null ? "" : body.replaceAll("\\s+", " ").strip();
+        return flat.length() <= 300 ? flat : flat.substring(0, 300) + "…";
     }
 
     /** First inbound messages of a ticket, oldest first, capped for token cost. */

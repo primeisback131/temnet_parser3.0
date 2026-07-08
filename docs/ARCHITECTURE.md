@@ -41,7 +41,7 @@
 
 | Слой | Технологии |
 | --- | --- |
-| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`/`JdbcTemplate`), MariaDB JDBC, Caffeine (кэш метрик), Anthropic Java SDK (LLM-классификация reopen'ов), Gradle (toolchain JDK 25) |
+| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`/`JdbcTemplate`), MariaDB JDBC, Caffeine (кэш метрик), Gradle (toolchain JDK 25); LLM-классификация reopen'ов — через OpenAI-совместимый HTTP API (java.net.http + Jackson) |
 | Frontend | React 19, Vite 5, TypeScript, Ant Design 5, TanStack Query, Apache ECharts, React Router, dayjs, ExcelJS |
 | БД | MariaDB: схема ejabberd (источник) + `temnet_analytics` (своя) |
 
@@ -160,10 +160,12 @@ SHA-1(client, stanza id, txt) и `INSERT IGNORE`; дальше в обработ
   `reopen_llm = 'pending'` и уходит на LLM-классификацию.
 
 **LLM-классификация** ([`LlmReopenClassifier`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java)):
-спорным кандидатам модель (по умолчанию `claude-haiku-4-5`) отвечает
-SAME/NEW по текстам старой и новой заявки. Без `ANTHROPIC_API_KEY` шаг
-выключен. Запросы идут с темпом `app.llm.requests-per-minute` (по умолчанию
-5/мин — лимит бесплатного тарифа Anthropic) и не больше
+спорным кандидатам модель отвечает SAME/NEW по текстам старой и новой заявки.
+Работает с любым OpenAI-совместимым chat-completions endpoint'ом
+(`app.llm.base-url` + `app.llm.api-key` + `app.llm.model`): Gemini free tier,
+Groq, OpenRouter, Anthropic, self-hosted — что угодно. Пока base-url пуст,
+шаг выключен. Запросы идут с темпом `app.llm.requests-per-minute`
+(по умолчанию 5/мин — укладывается в любой бесплатный тариф) и не больше
 `app.llm.max-per-sync` (20) за прогон, чтобы LLM-часть укладывалась в
 5-минутный интервал синхронизации; остальное дорешивается в следующих
 прогонах. Вердикты кэшируются в `llm_verdict`.
@@ -235,8 +237,9 @@ spring.datasource.url=${DB_URL:jdbc:mariadb://localhost:3306/ejabberd}
 app.analytics.url=${ANALYTICS_DB_URL:jdbc:mariadb://localhost:3306/temnet_analytics?createDatabaseIfNotExist=true}
 app.sync.interval=${SYNC_INTERVAL:PT5M}
 app.operator-prefix=${OPERATOR_PREFIX:help}
-app.llm.api-key=${ANTHROPIC_API_KEY:}
-app.llm.model=${LLM_MODEL:claude-haiku-4-5}
+app.llm.base-url=${LLM_BASE_URL:}
+app.llm.api-key=${LLM_API_KEY:}
+app.llm.model=${LLM_MODEL:gemini-flash-latest}
 app.llm.max-per-sync=${LLM_MAX_PER_SYNC:20}
 app.llm.requests-per-minute=${LLM_RPM:5}
 app.cors.allowed-origin=${CORS_ORIGIN:http://localhost:5173}

@@ -22,7 +22,8 @@
 - **Frontend** — React 19 + Vite + Ant Design 5 + TanStack Query, графики на
   Apache ECharts, экспорт отчётов в Excel (ExcelJS).
 - **LLM (опционально)** — классификация спорных повторных обращений через
-  Anthropic API; без API-ключа этот шаг просто выключен.
+  любой OpenAI-совместимый chat-completions API (бесплатные варианты —
+  Gemini free tier, Groq); пока base-url не задан, этот шаг просто выключен.
 
 ## Структура
 
@@ -54,8 +55,9 @@ run_backend.bat
 | `DB_URL`, `DB_USER`, `DB_PASSWORD` | подключение к дампу ejabberd | `localhost:3306/ejabberd`, `root:root` |
 | `ANALYTICS_DB_URL`, `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | аналитическая БД | `localhost:3306/temnet_analytics`, `root:root` |
 | `SYNC_INTERVAL`, `SYNC_INITIAL_DELAY` | периодичность синхронизации | 5 мин / 30 сек |
-| `ANTHROPIC_API_KEY` | ключ для LLM-классификации reopen'ов | пусто (выключено) |
-| `LLM_MODEL`, `LLM_MAX_PER_SYNC`, `LLM_RPM` | модель, лимит вызовов за один sync, темп запросов | `claude-haiku-4-5`, 20, 5/мин |
+| `LLM_BASE_URL` | OpenAI-совместимый endpoint для LLM-классификации reopen'ов (например `https://generativelanguage.googleapis.com/v1beta/openai`) | пусто (выключено) |
+| `LLM_API_KEY` | ключ провайдера (Gemini — с aistudio.google.com, без карты) | пусто |
+| `LLM_MODEL`, `LLM_MAX_PER_SYNC`, `LLM_RPM` | модель, лимит вызовов за один sync, темп запросов | `gemini-flash-latest`, 20, 5/мин |
 | `CORS_ORIGIN` | адрес фронтенда | `http://localhost:5173` |
 
 **Frontend:**
