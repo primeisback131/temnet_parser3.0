@@ -1,0 +1,82 @@
+# CI: запускается на каждый push любой ветки и на pull request.
+# Backend: юнит-тесты + интеграционный тест старта Spring-контекста
+# (ему нужна живая MariaDB — поднимается сервис-контейнером).
+# Frontend: типо-проверка tsc + production-сборка Vite.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests (Gradle)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/temnet_parser_2.0
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: ejabberd
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      DB_URL: jdbc:mariadb://127.0.0.1:3306/ejabberd
+      DB_USER: root
+      DB_PASSWORD: root
+      ANALYTICS_DB_URL: jdbc:mariadb://127.0.0.1:3306/temnet_analytics?createDatabaseIfNotExist=true
+      ANALYTICS_DB_USER: root
+      ANALYTICS_DB_PASSWORD: root
+      # Синк и LLM не должны срабатывать во время тестов.
+      SYNC_INITIAL_DELAY: PT10M
+      LLM_BASE_URL: ''
+      LLM_PROXY: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run tests
+        run: ./gradlew test
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-report
+          path: backend/temnet_parser_2.0/build/reports/tests/test
+
+  frontend:
+    name: Frontend build (tsc + Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-react
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
