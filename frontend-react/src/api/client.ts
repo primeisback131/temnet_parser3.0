@@ -6,6 +6,8 @@ import type {
   Company,
   Group,
   HeatmapCell,
+  HelpAccount,
+  HelpAccountReport,
   MetricPoint,
   OperatorStat,
   ReopenPoint,
@@ -35,6 +37,11 @@ export const api = {
 
   getCompanies: (start: string, end: string) =>
     getJson<Company[]>("/companies", { start, end }),
+
+  getHelpAccounts: () => getJson<HelpAccount[]>("/help-accounts"),
+
+  getHelpAccountReport: (start: string, end: string, account: string) =>
+    getJson<HelpAccountReport>("/help-accounts/report", { start, end, account }),
 
   getUsers: (start: string, end: string, groupName: string) =>
     getJson<UserStat[]>("/users", { start, end, groupName }),

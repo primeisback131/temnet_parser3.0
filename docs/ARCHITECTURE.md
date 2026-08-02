@@ -51,8 +51,8 @@ DTO на бэкенде — **Java records** (Lombok не используетс
 ## 3. Структура репозитория
 
 ```
-temnet_parser_2.0/
-├─ backend/temnet_parser_2.0/          Spring Boot приложение (порт 8080)
+temnet_parser_3.0/
+├─ backend/temnet_parser_3.0/          Spring Boot приложение (порт 8080)
 │  ├─ build.gradle                     Java 25 toolchain, Spring Boot 4
 │  ├─ gradle/wrapper/                  Gradle wrapper (9.1.0)
 │  ├─ db/                              схема + сид-данные для локальной проверки
@@ -104,7 +104,7 @@ temnet_parser_2.0/
 
 ### Аналитическая БД (`temnet_analytics`)
 
-Схема — [`analytics/schema.sql`](../backend/temnet_parser_2.0/src/main/resources/analytics/schema.sql),
+Схема — [`analytics/schema.sql`](../backend/temnet_parser_3.0/src/main/resources/analytics/schema.sql),
 создаётся при старте, стейтменты идемпотентны.
 
 | Таблица | Смысл |
@@ -127,7 +127,7 @@ temnet_parser_2.0/
 
 ## 5. Синхронизация и тикеты
 
-Центральный класс — [`AnalyticsSyncService`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/analytics/AnalyticsSyncService.java).
+Центральный класс — [`AnalyticsSyncService`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/AnalyticsSyncService.java).
 Запускается по расписанию (задержка 30 сек после старта, далее каждые 5 минут)
 и вручную через `POST /admin/sync`.
 
@@ -159,7 +159,7 @@ SHA-1(client, stanza id, txt) и `INSERT IGNORE`; дальше в обработ
   +2 балла, совпадение категории +1; при нуле баллов кандидат помечается
   `reopen_llm = 'pending'` и уходит на LLM-классификацию.
 
-**LLM-классификация** ([`LlmReopenClassifier`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java)):
+**LLM-классификация** ([`LlmReopenClassifier`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java)):
 спорным кандидатам модель отвечает SAME/NEW по текстам старой и новой заявки.
 Работает с любым OpenAI-совместимым chat-completions endpoint'ом
 (`app.llm.base-url` + `app.llm.api-key` + `app.llm.model`): Gemini free tier,
@@ -197,6 +197,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `GroupController` | `GET /groups` |
 | `CompanyController` | `GET /companies` |
 | `UserStatsController` | `GET /users` |
+| `HelpAccountController` | `GET /help-accounts`, `GET /help-accounts/report` |
 | `ChatController` | `GET /chat`, `GET /chat/chatlist` |
 | `MetricsController` | `GET /metrics/{timeseries,heatmap,sla,resolution,reopens,alerts,categories,operators}` |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` |
@@ -212,7 +213,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 ### Работа с SQL
 
 - Запросы метрик лежат в `resources/sql/*.sql` и грузятся один раз в
-  статическое поле репозитория через [`SqlLoader`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java).
+  статическое поле репозитория через [`SqlLoader`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java).
 - **Параметры** биндятся по имени: `:start`, `:endExclusive`, `:groupName`,
   `:maxFrtSeconds` и т.п. — защита от инъекций.
 - **Динамические фрагменты** SQL (выражение гранулярности, опциональный
@@ -223,14 +224,14 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 
 Ключевые support-классы:
 
-- [`SqlLoader`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java) — загрузка SQL из classpath.
-- [`CategoryRules`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений (ранг + имя).
-- [`BusinessTime`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/BusinessTime.java) — рабочие секунды между двумя моментами.
-- [`Bucket`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/dto/Bucket.java) — гранулярность времени; хранит SQL-шаблон усечения даты.
+- [`SqlLoader`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java) — загрузка SQL из classpath.
+- [`CategoryRules`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений (ранг + имя).
+- [`BusinessTime`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/BusinessTime.java) — рабочие секунды между двумя моментами.
+- [`Bucket`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/dto/Bucket.java) — гранулярность времени; хранит SQL-шаблон усечения даты.
 
 ### Конфигурация
 
-[`application.properties`](../backend/temnet_parser_2.0/src/main/resources/application.properties) — всё читается из env с дефолтами:
+[`application.properties`](../backend/temnet_parser_3.0/src/main/resources/application.properties) — всё читается из env с дефолтами:
 
 ```properties
 spring.datasource.url=${DB_URL:jdbc:mariadb://localhost:3306/ejabberd}
@@ -248,7 +249,7 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
 
 - Пул соединений — **HikariCP** (дефолт Spring Boot), для аналитики —
   отдельный DataSource.
-- **CORS** — единый [`WebConfig`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java) (`allowedOrigins` из `app.cors.allowed-origin`).
+- **CORS** — единый [`WebConfig`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java) (`allowedOrigins` из `app.cors.allowed-origin`).
 - **Кэш метрик** — Caffeine, ответы кэшируются по комбинации параметров;
   после sync с новыми данными кэши чистятся.
 
@@ -304,7 +305,7 @@ Page → use*-хук (TanStack Query) → api.client → fetch → backend
 
 **Требования:** JDK 25 (для бэка), Node 18+ (для фронта), MariaDB с базой
 `ejabberd`. Тестовая схема и данные — в
-[`backend/.../db/`](../backend/temnet_parser_2.0/db/README.md).
+[`backend/.../db/`](../backend/temnet_parser_3.0/db/README.md).
 
 ```bat
 run_backend.bat     :: JAVA_HOME=JDK25 + gradlew bootRun → http://localhost:8080
@@ -315,7 +316,7 @@ run_frontend.bat    :: npm install (при первом запуске) + npm ru
 
 ```bash
 # backend
-cd backend/temnet_parser_2.0 && ./gradlew bootRun
+cd backend/temnet_parser_3.0 && ./gradlew bootRun
 # frontend
 cd frontend-react && npm install && npm run build   # tsc + vite build → dist/
 ```

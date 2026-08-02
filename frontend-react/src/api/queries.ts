@@ -10,6 +10,14 @@ export function useGroups() {
   });
 }
 
+export function useHelpAccounts() {
+  return useQuery({
+    queryKey: ["helpAccounts"],
+    queryFn: api.getHelpAccounts,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
 export function useCompanies(start: string, end: string) {
   return useQuery({
     queryKey: ["companies", start, end],

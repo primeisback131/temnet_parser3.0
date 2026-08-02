@@ -399,7 +399,7 @@ cat(T)  = name( min_{m∈S_in} rank(m) ),              name(K+1) = «Друго�
 requests(c) = |{ T : cat(T) = c, opened_at ∈ период }|
 ```
 
-**Словарь категорий** ([`CategoryRules`](../backend/temnet_parser_2.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java), в порядке приоритета):
+**Словарь категорий** ([`CategoryRules`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java), в порядке приоритета):
 
 | Категория | Ключевые слова (подстроки `LOWER(txt)`) |
 | --- | --- |

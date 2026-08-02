@@ -28,7 +28,7 @@
 ## Структура
 
 ```
-backend/temnet_parser_2.0   Spring Boot приложение (порт 8080)
+backend/temnet_parser_3.0   Spring Boot приложение (порт 8080)
   ├─ src/main/java/...       контроллеры, сервисы, репозитории, DTO (records),
   │                          пакет analytics/ — синхронизация и тикеты
   ├─ src/main/resources/sql  SQL-запросы метрик (вынесены из кода)

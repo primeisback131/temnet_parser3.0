@@ -12,6 +12,65 @@ export interface Company {
   totalMessages: number;
 }
 
+export interface HelpAccount {
+  account: string;
+}
+
+export interface GroupUserStat {
+  groupName: string;
+  userName: string;
+  closedRequests: number;
+  rejectedRequests: number;
+  totalMessages: number;
+}
+
+export interface GroupSlaStat {
+  groupName: string;
+  responses: number;
+  avgSeconds: number;
+  p50Seconds: number;
+  p90Seconds: number;
+}
+
+export interface GroupResolutionStat {
+  groupName: string;
+  resolved: number;
+  avgSeconds: number;
+  p50Seconds: number;
+  p90Seconds: number;
+}
+
+export interface GroupReopenStat {
+  groupName: string;
+  closed: number;
+  probable: number;
+  confirmed: number;
+}
+
+export interface GroupDailyPoint {
+  groupName: string;
+  bucket: string; // ISO date
+  messages: number;
+  closed: number;
+  rejected: number;
+}
+
+export interface GroupCategoryCount {
+  groupName: string;
+  category: string;
+  requests: number;
+}
+
+/** Every implemented metric for one help account, broken down by group. */
+export interface HelpAccountReport {
+  users: GroupUserStat[];
+  sla: GroupSlaStat[];
+  resolution: GroupResolutionStat[];
+  reopens: GroupReopenStat[];
+  timeseries: GroupDailyPoint[];
+  categories: GroupCategoryCount[];
+}
+
 export interface UserStat {
   userName: string;
   closedRequests: number;

@@ -10,3 +10,20 @@ export function toApiDate(d: Dayjs): string {
 export function defaultRange(): [Dayjs, Dayjs] {
   return [dayjs().startOf("year"), dayjs()];
 }
+
+/**
+ * Split an inclusive date range into calendar-month chunks. The first and
+ * last chunks may be partial months; the ones in between are whole months.
+ */
+export function monthlyRanges(start: Dayjs, end: Dayjs): [Dayjs, Dayjs][] {
+  const ranges: [Dayjs, Dayjs][] = [];
+  let cur = start.startOf("day");
+  const last = end.startOf("day");
+  while (!cur.isAfter(last)) {
+    const monthEnd = cur.endOf("month").startOf("day");
+    const chunkEnd = monthEnd.isBefore(last) ? monthEnd : last;
+    ranges.push([cur, chunkEnd]);
+    cur = chunkEnd.add(1, "day");
+  }
+  return ranges;
+}

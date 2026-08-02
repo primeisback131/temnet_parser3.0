@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend/temnet_parser_2.0
+        working-directory: backend/temnet_parser_3.0
     services:
       mariadb:
         image: mariadb:11
@@ -58,7 +58,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: backend-test-report
-          path: backend/temnet_parser_2.0/build/reports/tests/test
+          path: backend/temnet_parser_3.0/build/reports/tests/test
 
   frontend:
     name: Frontend build (tsc + Vite)

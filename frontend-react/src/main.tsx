@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ConfigProvider, theme as antdTheme } from "antd";
+import { App as AntApp, ConfigProvider, theme as antdTheme } from "antd";
 import ruRU from "antd/locale/ru_RU";
 import { BrowserRouter } from "react-router-dom";
 import dayjs from "dayjs";
@@ -33,9 +33,13 @@ function ThemedApp() {
         token: { colorPrimary: "#3e79f7" },
       }}
     >
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      {/* antd's App provides the message/notification context — the static
+          message API silently does nothing under React 19. */}
+      <AntApp>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </AntApp>
     </ConfigProvider>
   );
 }
