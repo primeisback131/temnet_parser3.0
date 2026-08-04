@@ -20,9 +20,21 @@ public class GroupRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    public List<Group> findAll() {
-        return jdbcClient.sql(SQL)
-                .query(new DataClassRowMapper<>(Group.class))
-                .list();
+    /**
+     * Only the groups the caller may see — this list drives every picker.
+     * Desks expand to the organizations they serve, so the list is the already
+     * resolved set, not the raw grants.
+     */
+    public List<Group> findAll(List<String> visibleGroups, boolean unrestricted) {
+        if (!unrestricted && visibleGroups.isEmpty()) {
+            return List.of();
+        }
+        String sql = SQL.replace("${scopeFilter}",
+                ScopeSql.groupList("grp", visibleGroups, unrestricted));
+        var spec = jdbcClient.sql(sql);
+        if (!unrestricted) {
+            spec = spec.param("visibleGroups", visibleGroups);
+        }
+        return spec.query(new DataClassRowMapper<>(Group.class)).list();
     }
 }

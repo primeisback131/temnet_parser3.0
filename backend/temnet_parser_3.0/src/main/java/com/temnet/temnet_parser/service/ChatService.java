@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.service;
 
 import com.temnet.temnet_parser.dto.ChatMessage;
 import com.temnet.temnet_parser.repository.ChatRepository;
+import com.temnet.temnet_parser.security.Scope;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -18,13 +19,13 @@ public class ChatService {
         this.chatRepository = chatRepository;
     }
 
-    public List<ChatMessage> history(LocalDate start, LocalDate end, String groupName) {
-        return chatRepository.findHistory(start, end, groupName);
+    public List<ChatMessage> history(LocalDate start, LocalDate end, Scope scope) {
+        return chatRepository.findHistory(start, end, scope);
     }
 
     /** Distinct senders in the group's history, excluding the support ("help") side. */
-    public Set<String> participants(LocalDate start, LocalDate end, String groupName) {
-        return history(start, end, groupName).stream()
+    public Set<String> participants(LocalDate start, LocalDate end, Scope scope) {
+        return history(start, end, scope).stream()
                 .map(ChatMessage::sender)
                 .filter(sender -> !sender.contains("help"))
                 .collect(Collectors.toUnmodifiableSet());

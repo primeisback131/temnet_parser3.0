@@ -1,6 +1,8 @@
 package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.UserStat;
+import com.temnet.temnet_parser.security.AccessControlService;
+import com.temnet.temnet_parser.security.AccessControlService.Area;
 import com.temnet.temnet_parser.service.UserStatsService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,9 +18,11 @@ import static org.springframework.format.annotation.DateTimeFormat.ISO;
 public class UserStatsController {
 
     private final UserStatsService userStatsService;
+    private final AccessControlService accessControl;
 
-    public UserStatsController(UserStatsService userStatsService) {
+    public UserStatsController(UserStatsService userStatsService, AccessControlService accessControl) {
         this.userStatsService = userStatsService;
+        this.accessControl = accessControl;
     }
 
     @GetMapping("/users")
@@ -26,6 +30,8 @@ public class UserStatsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam String groupName) {
-        return userStatsService.report(start, end, groupName);
+                // Refuses outright when the group was not granted.
+        return userStatsService.report(start, end, groupName,
+                accessControl.scope(groupName, Area.METRICS));
     }
 }

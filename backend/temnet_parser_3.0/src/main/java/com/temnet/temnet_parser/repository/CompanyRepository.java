@@ -1,6 +1,7 @@
 package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.Company;
+import com.temnet.temnet_parser.security.Scope;
 import com.temnet.temnet_parser.support.SqlLoader;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
@@ -21,12 +22,22 @@ public class CompanyRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    public List<Company> findReport(LocalDate start, LocalDate end) {
+    public List<Company> findReport(LocalDate start, LocalDate end, Scope scope, List<String> visibleGroups) {
+        if (scope.isEmpty()) {
+            return List.of();
+        }
+        String sql = SQL
+                .replace("${scopeFilter}", ScopeSql.groupList("cg.grp", visibleGroups, scope.unrestricted()))
+                .replace("${scopeMessages}", ScopeSql.messages("m", scope))
+                .replace("${scopeTickets}", ScopeSql.tickets("t", scope))
+                .replace("${backlogBoundary}", DataHorizon.CAPPED_END);
         // The end date is inclusive: half-open [start, end+1day) interval.
-        return jdbcClient.sql(SQL)
+        var spec = ScopeSql.bind(jdbcClient.sql(sql)
                 .param("start", start)
-                .param("endExclusive", end.plusDays(1))
-                .query(new DataClassRowMapper<>(Company.class))
-                .list();
+                .param("endExclusive", end.plusDays(1)), scope);
+        if (!scope.unrestricted() && !visibleGroups.isEmpty()) {
+            spec = spec.param("visibleGroups", visibleGroups);
+        }
+        return spec.query(new DataClassRowMapper<>(Company.class)).list();
     }
 }

@@ -1,6 +1,7 @@
 package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.ChatMessage;
+import com.temnet.temnet_parser.security.Scope;
 import com.temnet.temnet_parser.support.SqlLoader;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
@@ -21,12 +22,15 @@ public class ChatRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    /** Chat history of the given group's clients; the end date is inclusive. */
-    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, String groupName) {
-        return jdbcClient.sql(SQL)
-                .param("groupName", groupName)
-                .param("start", start)
-                .param("endExclusive", end.plusDays(1))
+    /** Chat history within the caller's scope; the end date is inclusive. */
+    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, Scope scope) {
+        if (scope.isEmpty()) {
+            return List.of();
+        }
+        String sql = SQL.replace("${scopeMessages}", ScopeSql.messages("m", scope));
+        return ScopeSql.bind(jdbcClient.sql(sql)
+                        .param("start", start)
+                        .param("endExclusive", end.plusDays(1)), scope)
                 .query(new DataClassRowMapper<>(ChatMessage.class))
                 .list();
     }

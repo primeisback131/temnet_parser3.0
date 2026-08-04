@@ -15,7 +15,7 @@ public class GroupService {
         this.groupRepository = groupRepository;
     }
 
-    public List<Group> listGroups() {
-        return groupRepository.findAll();
+    public List<Group> listGroups(java.util.List<String> visibleGroups, boolean unrestricted) {
+        return groupRepository.findAll(visibleGroups, unrestricted);
     }
 }

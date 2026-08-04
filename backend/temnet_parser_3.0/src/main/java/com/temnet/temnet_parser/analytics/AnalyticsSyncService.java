@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.analytics;
 
 import com.temnet.temnet_parser.support.BusinessTime;
 import com.temnet.temnet_parser.support.CategoryRules;
+import com.temnet.temnet_parser.support.ClosurePhrase;
 import com.temnet.temnet_parser.support.SqlLoader;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -34,6 +35,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -75,6 +81,9 @@ public class AnalyticsSyncService {
     private static final Pattern ACK = Pattern.compile(
             "\\b(спасибо|благодарю|благодарим|ок|окей|хорошо|понял|поняла|понятно|принято|отлично|супер|ага|угу)\\b",
             Pattern.UNICODE_CHARACTER_CLASS);
+    /** A binary string in an Erlang term: {@code <<"name">>}. */
+    private static final Pattern ERLANG_BINARY = Pattern.compile("<<\"([^\"]*)\">>");
+
     private static final Pattern REOPEN_MARKERS = Pattern.compile(
             "опять|снова|не помог|та же|тот же|всё ещё|все еще|повторн|прежнему|так и не");
 
@@ -106,6 +115,35 @@ public class AnalyticsSyncService {
                               long watermark, long durationMs) {
     }
 
+    /** Kinds of run, as shown on the maintenance screen. */
+    public static final String KIND_SCHEDULED = "scheduled";
+    public static final String KIND_INCREMENTAL = "incremental";
+    public static final String KIND_REBUILD = "rebuild";
+
+    private static final String STARTED_BY_SCHEDULER = "по расписанию";
+
+    /**
+     * What the sync is doing right now, or how the last attempt ended — the
+     * only progress signal a caller gets, since a run is fire-and-forget.
+     */
+    public record SyncRun(String kind, String startedBy, LocalDateTime startedAt, LocalDateTime finishedAt,
+                          boolean running, SyncSummary summary, String error) {
+
+        SyncRun finished(SyncSummary result, String failure) {
+            return new SyncRun(kind, startedBy, startedAt, LocalDateTime.now(), false, result, failure);
+        }
+    }
+
+    // One run at a time: the ticket state machine walks the dump in order and
+    // a rebuild truncates underneath it, so two of them must never overlap.
+    private final AtomicBoolean running = new AtomicBoolean();
+    private final AtomicReference<SyncRun> lastRun = new AtomicReference<>();
+    private final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "analytics-sync");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     /** A normalized message of a client <-> support conversation. */
     private record Msg(long sourceId, String client, String author, String recipient, boolean inbound, String txt,
                        LocalDateTime createdAt, byte[] hash) {
@@ -132,11 +170,59 @@ public class AnalyticsSyncService {
 
     @Scheduled(initialDelayString = "${app.sync.initial-delay:PT30S}", fixedDelayString = "${app.sync.interval:PT5M}")
     void scheduledSync() {
+        SyncRun started;
         try {
-            sync(false);
-        } catch (Exception e) {
-            log.error("Scheduled sync failed", e);
+            started = claim(KIND_SCHEDULED, STARTED_BY_SCHEDULER);
+        } catch (IllegalStateException e) {
+            log.debug("Scheduled sync skipped: {}", e.getMessage());
+            return;
         }
+        // Deliberately inline rather than on the executor: fixedDelay has to
+        // measure from the end of a run, not from handing it off.
+        run(started, false);
+    }
+
+    /** What the sync is doing right now, or how it last ended; null before the first run. */
+    public SyncRun lastRun() {
+        return lastRun.get();
+    }
+
+    /**
+     * Starts a run on a background thread and returns its initial state at
+     * once. A full rebuild re-ingests the entire dump and takes minutes — far
+     * longer than an HTTP request may sit open — so callers poll
+     * {@link #lastRun()} instead of waiting.
+     *
+     * @throws IllegalStateException if a run is already in flight
+     */
+    public SyncRun startAsync(boolean rebuild, String startedBy) {
+        SyncRun started = claim(rebuild ? KIND_REBUILD : KIND_INCREMENTAL, startedBy);
+        syncExecutor.execute(() -> run(started, rebuild));
+        return started;
+    }
+
+    /** Takes the single run slot, or refuses. */
+    private SyncRun claim(String kind, String startedBy) {
+        if (!running.compareAndSet(false, true)) {
+            throw new IllegalStateException("Синхронизация уже выполняется");
+        }
+        SyncRun started = new SyncRun(kind, startedBy, LocalDateTime.now(), null, true, null, null);
+        lastRun.set(started);
+        return started;
+    }
+
+    private void run(SyncRun started, boolean rebuild) {
+        SyncRun done;
+        try {
+            done = started.finished(sync(rebuild), null);
+        } catch (Exception e) {
+            log.error("{} sync failed", started.kind(), e);
+            done = started.finished(null, e.getMessage() == null ? e.toString() : e.getMessage());
+        }
+        // Publish the outcome before freeing the slot: a poll must never see an
+        // idle sync still carrying the previous run's result.
+        lastRun.set(done);
+        running.set(false);
     }
 
     public synchronized SyncSummary sync(boolean rebuild) {
@@ -183,6 +269,7 @@ public class AnalyticsSyncService {
         }
 
         syncGroups();
+        syncHelpAccountGroups();
         int llmClassified = llmClassifier.classifyPending();
         analytics.update(
                 "UPDATE sync_state SET last_run_at = NOW(), messages_total = (SELECT COUNT(*) FROM message m) WHERE id = 1");
@@ -362,6 +449,75 @@ public class AnalyticsSyncService {
         });
     }
 
+    /**
+     * Which groups each help desk serves, taken from ejabberd's shared-roster
+     * configuration: {@code sr_group.opts} carries a {@code displayed_groups}
+     * list, and {@code sr_user} says which help group an account belongs to
+     * (the names differ — account {@code help-mag} sits in group
+     * {@code help-magistr}). This is what the administrators configured, so no
+     * heuristic over the correspondence can beat it: it is right the moment a
+     * desk is set up and it follows a hand-over immediately.
+     * <p>
+     * Both source tables are tiny, so this runs on every sync — a change in
+     * ejabberd reaches the permissions within one sync interval.
+     */
+    private void syncHelpAccountGroups() {
+        Map<String, List<String>> served = new HashMap<>();
+        source.sql("SELECT name, opts FROM sr_group WHERE name LIKE :prefix")
+                .param("prefix", operatorPrefix + "%")
+                .query((rs, i) -> Map.entry(rs.getString("name"), displayedGroups(rs.getString("opts"))))
+                .list()
+                .forEach(e -> served.put(e.getKey().toLowerCase(), e.getValue()));
+
+        // An account can sit in several help groups; it then serves the union.
+        List<Object[]> rows = source.sql(
+                        "SELECT DISTINCT SUBSTRING_INDEX(jid, '@', 1) AS account, grp FROM sr_user WHERE grp LIKE :prefix")
+                .param("prefix", operatorPrefix + "%")
+                .query((rs, i) -> Map.entry(rs.getString("account"), rs.getString("grp").toLowerCase()))
+                .list().stream()
+                .flatMap(e -> served.getOrDefault(e.getValue(), List.of()).stream()
+                        .map(grp -> new Object[]{e.getKey(), grp}))
+                .distinct()
+                .toList();
+
+        tx.executeWithoutResult(status -> {
+            analytics.update("DELETE FROM help_account_group");
+            analytics.batchUpdate("INSERT IGNORE INTO help_account_group (account, grp) VALUES (?, ?)", rows);
+        });
+        log.debug("Help account scopes rebuilt: {} pairs", rows.size());
+    }
+
+    /**
+     * Pulls the group names out of an Erlang {@code opts} term. Only the
+     * {@code displayed_groups} list is read; the {@code label} next to it is
+     * encoded as a byte list, not as a binary string, so it cannot be mistaken
+     * for a group name. Service groups are dropped — a desk may display another
+     * desk's group, which is not a client organization.
+     */
+    private List<String> displayedGroups(String opts) {
+        if (opts == null) {
+            return List.of();
+        }
+        int marker = opts.indexOf("displayed_groups");
+        if (marker < 0) {
+            return List.of();
+        }
+        int open = opts.indexOf('[', marker);
+        int close = opts.indexOf(']', open);
+        if (open < 0 || close < 0) {
+            return List.of();
+        }
+        List<String> groups = new ArrayList<>();
+        Matcher m = ERLANG_BINARY.matcher(opts.substring(open, close));
+        while (m.find()) {
+            String grp = m.group(1);
+            if (!grp.toLowerCase().startsWith(operatorPrefix) && !grp.equals("all")) {
+                groups.add(grp);
+            }
+        }
+        return groups;
+    }
+
     private static String local(String jid) {
         int at = jid.indexOf('@');
         return at < 0 ? jid : jid.substring(0, at);
@@ -437,6 +593,8 @@ public class AnalyticsSyncService {
             }
 
             Ticket ticket = new Ticket(m.client(), m.createdAt());
+            // The desk this ticket belongs to: whoever the client addressed.
+            ticket.account = m.recipient();
             ticket.categoryRank = CategoryRules.rankOf(m.txt());
             ticket.messagesIn = 1;
             if (st.lastClosed != null
@@ -476,10 +634,9 @@ public class AnalyticsSyncService {
                     && (lower.contains("заявка в работе") || lower.contains("в работе заявка"))) {
                 st.open.inProgressAt = m.createdAt();
             }
-            if (lower.contains("закрыта заявка") || lower.contains("заявка закрыта")) {
-                close(st, m, "closed");
-            } else if (lower.contains("отклонена заявка") || lower.contains("заявка отклонена")) {
-                close(st, m, "rejected");
+            String closingStatus = ClosurePhrase.statusOf(m.txt());
+            if (closingStatus != null) {
+                close(st, m, closingStatus);
             } else {
                 dirty.add(st.open);
             }
@@ -508,13 +665,14 @@ public class AnalyticsSyncService {
 
         private Ticket latest(String client, String statusFilter, String orderBy) {
             List<Ticket> found = analytics.query(
-                    "SELECT id, client, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
+                    "SELECT id, client, account, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
                             + " in_progress_at, closed_at, closed_by, resolution_seconds, status, category_rank,"
                             + " messages_in, messages_out, reopened_from, reopen_score, reopen_llm"
                             + " FROM ticket WHERE client = ? AND " + statusFilter
                             + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
                     (rs, i) -> {
                         Ticket t = new Ticket(rs.getString("client"), rs.getTimestamp("opened_at").toLocalDateTime());
+                        t.account = rs.getString("account");
                         t.id = rs.getLong("id");
                         t.lastActivity = rs.getTimestamp("last_activity").toLocalDateTime();
                         t.firstResponseAt = toLocal(rs.getTimestamp("first_response_at"));
@@ -544,11 +702,12 @@ public class AnalyticsSyncService {
             GeneratedKeyHolder keys = new GeneratedKeyHolder();
             analytics.update(con -> {
                 PreparedStatement ps = con.prepareStatement("""
-                                INSERT INTO ticket (client, opened_at, last_activity, stale_at, first_response_at,
-                                                    first_responder, frt_seconds, in_progress_at, closed_at, closed_by,
-                                                    resolution_seconds, status, category, category_rank, messages_in,
-                                                    messages_out, reopened_from, reopen_score, reopen_llm)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO ticket (client, account, opened_at, last_activity, stale_at,
+                                                    first_response_at, first_responder, frt_seconds, in_progress_at,
+                                                    closed_at, closed_by, resolution_seconds, status, category,
+                                                    category_rank, messages_in, messages_out, reopened_from,
+                                                    reopen_score, reopen_llm)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -591,24 +750,25 @@ public class AnalyticsSyncService {
 
         private void fillTicket(PreparedStatement ps, Ticket t) throws java.sql.SQLException {
             ps.setString(1, t.client);
-            ps.setTimestamp(2, Timestamp.valueOf(t.openedAt));
-            ps.setTimestamp(3, Timestamp.valueOf(t.lastActivity));
-            ps.setTimestamp(4, Timestamp.valueOf(staleAt(t)));
-            ps.setTimestamp(5, toTimestamp(t.firstResponseAt));
-            ps.setString(6, t.firstResponder);
-            setNullableLong(ps, 7, t.frtSeconds);
-            ps.setTimestamp(8, toTimestamp(t.inProgressAt));
-            ps.setTimestamp(9, toTimestamp(t.closedAt));
-            ps.setString(10, t.closedBy);
-            setNullableLong(ps, 11, t.resolutionSeconds);
-            ps.setString(12, t.status);
-            ps.setString(13, CategoryRules.nameOf(t.categoryRank));
-            ps.setInt(14, t.categoryRank);
-            ps.setInt(15, t.messagesIn);
-            ps.setInt(16, t.messagesOut);
-            setNullableLong(ps, 17, t.reopenedFrom);
-            ps.setInt(18, t.reopenScore);
-            ps.setString(19, t.reopenLlm);
+            ps.setString(2, t.account);
+            ps.setTimestamp(3, Timestamp.valueOf(t.openedAt));
+            ps.setTimestamp(4, Timestamp.valueOf(t.lastActivity));
+            ps.setTimestamp(5, Timestamp.valueOf(staleAt(t)));
+            ps.setTimestamp(6, toTimestamp(t.firstResponseAt));
+            ps.setString(7, t.firstResponder);
+            setNullableLong(ps, 8, t.frtSeconds);
+            ps.setTimestamp(9, toTimestamp(t.inProgressAt));
+            ps.setTimestamp(10, toTimestamp(t.closedAt));
+            ps.setString(11, t.closedBy);
+            setNullableLong(ps, 12, t.resolutionSeconds);
+            ps.setString(13, t.status);
+            ps.setString(14, CategoryRules.nameOf(t.categoryRank));
+            ps.setInt(15, t.categoryRank);
+            ps.setInt(16, t.messagesIn);
+            ps.setInt(17, t.messagesOut);
+            setNullableLong(ps, 18, t.reopenedFrom);
+            ps.setInt(19, t.reopenScore);
+            ps.setString(20, t.reopenLlm);
         }
 
         /**

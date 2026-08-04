@@ -2,19 +2,22 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./client";
 import type { Bucket } from "./types";
 
-export function useGroups() {
+/** Groups the signed-in user may see in the given area. */
+export function useGroups(area: "metrics" | "chats" = "metrics") {
   return useQuery({
-    queryKey: ["groups"],
-    queryFn: api.getGroups,
+    queryKey: ["groups", area],
+    queryFn: () => api.getGroups(area),
     staleTime: 5 * 60 * 1000,
   });
 }
 
-export function useHelpAccounts() {
+/** Desks the user may report on; closed to read-only accounts, hence `enabled`. */
+export function useHelpAccounts(enabled = true) {
   return useQuery({
     queryKey: ["helpAccounts"],
     queryFn: api.getHelpAccounts,
     staleTime: 5 * 60 * 1000,
+    enabled,
   });
 }
 
@@ -126,5 +129,18 @@ export function useOperators(start: string, end: string, groupName: string | nul
   return useQuery({
     queryKey: ["operators", start, end, groupName],
     queryFn: () => api.getOperators(start, end, groupName ?? undefined),
+  });
+}
+
+/**
+ * State of the analytics sync for the maintenance screen. While a run is in
+ * flight it is polled every 2 s, so a rebuild finishing is visible without a
+ * page reload; when nothing is running the polling stops.
+ */
+export function useSyncStatus() {
+  return useQuery({
+    queryKey: ["syncStatus"],
+    queryFn: api.getSyncStatus,
+    refetchInterval: (query) => (query.state.data?.run?.running ? 2000 : false),
   });
 }

@@ -4,6 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useMemo, useState } from "react";
 import { useGroups, useUsers } from "../api/queries";
 import type { UserStat } from "../api/types";
+import { useAuth } from "../auth";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel } from "../lib/excel";
 
@@ -25,6 +26,7 @@ export default function UsersPage() {
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
 
+  const { canExport } = useAuth();
   const { data: groups = [] } = useGroups();
   const { data = [], isFetching } = useUsers(startStr, endStr, group);
 
@@ -58,15 +60,17 @@ export default function UsersPage() {
           onChange={setGroup}
           options={groups.map((g) => ({ value: g.groupName, label: g.groupName }))}
         />
-        <Tooltip title="Экспорт таблицы">
-          <Button
-            icon={<FileExcelOutlined />}
-            onClick={() => exportToExcel(filtered, `${group ?? "users"}_${startStr}_${endStr}.xlsx`, "Пользователи")}
-            disabled={filtered.length === 0}
-          >
-            Excel
-          </Button>
-        </Tooltip>
+        {canExport && (
+          <Tooltip title="Экспорт таблицы">
+            <Button
+              icon={<FileExcelOutlined />}
+              onClick={() => exportToExcel(filtered, `${group ?? "users"}_${startStr}_${endStr}.xlsx`, "Пользователи")}
+              disabled={filtered.length === 0}
+            >
+              Excel
+            </Button>
+          </Tooltip>
+        )}
       </Space>
       {group ? (
         <Table

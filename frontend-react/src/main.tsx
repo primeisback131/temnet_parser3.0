@@ -9,6 +9,7 @@ import "dayjs/locale/ru";
 import "antd/dist/reset.css";
 import "./styles.css";
 import App from "./App";
+import { AuthProvider } from "./auth";
 import { ThemeModeProvider, useThemeMode } from "./theme";
 
 dayjs.locale("ru");
@@ -37,7 +38,9 @@ function ThemedApp() {
           message API silently does nothing under React 19. */}
       <AntApp>
         <BrowserRouter>
-          <App />
+          <AuthProvider>
+            <App />
+          </AuthProvider>
         </BrowserRouter>
       </AntApp>
     </ConfigProvider>

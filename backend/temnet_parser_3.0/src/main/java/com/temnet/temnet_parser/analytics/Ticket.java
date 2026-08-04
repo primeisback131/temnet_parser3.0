@@ -7,6 +7,7 @@ class Ticket {
 
     Long id;
     final String client;
+    String account;
     final LocalDateTime openedAt;
     LocalDateTime lastActivity;
     LocalDateTime firstResponseAt;

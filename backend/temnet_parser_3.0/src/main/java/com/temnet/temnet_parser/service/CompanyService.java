@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.service;
 
 import com.temnet.temnet_parser.dto.Company;
 import com.temnet.temnet_parser.repository.CompanyRepository;
+import com.temnet.temnet_parser.security.Scope;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -16,7 +17,7 @@ public class CompanyService {
         this.companyRepository = companyRepository;
     }
 
-    public List<Company> report(LocalDate start, LocalDate end) {
-        return companyRepository.findReport(start, end);
+    public List<Company> report(LocalDate start, LocalDate end, Scope scope, java.util.List<String> visibleGroups) {
+        return companyRepository.findReport(start, end, scope, visibleGroups);
     }
 }

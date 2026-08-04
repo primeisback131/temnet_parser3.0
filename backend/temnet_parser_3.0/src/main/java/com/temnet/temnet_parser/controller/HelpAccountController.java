@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.HelpAccount;
 import com.temnet.temnet_parser.dto.HelpAccountReport;
+import com.temnet.temnet_parser.security.AccessControlService;
 import com.temnet.temnet_parser.service.HelpAccountService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,14 +20,23 @@ import static org.springframework.format.annotation.DateTimeFormat.ISO;
 public class HelpAccountController {
 
     private final HelpAccountService helpAccountService;
+    private final AccessControlService accessControl;
 
-    public HelpAccountController(HelpAccountService helpAccountService) {
+    public HelpAccountController(HelpAccountService helpAccountService, AccessControlService accessControl) {
         this.helpAccountService = helpAccountService;
+        this.accessControl = accessControl;
     }
 
+    /** Only the help accounts the caller was granted (all of them for admins). */
     @GetMapping
     public List<HelpAccount> getAccounts() {
-        return helpAccountService.listAccounts();
+        List<String> allowed = accessControl.describe().helpAccounts();
+        if (accessControl.currentUser().isAdmin()) {
+            return helpAccountService.listAccounts();
+        }
+        return helpAccountService.listAccounts().stream()
+                .filter(a -> allowed.contains(a.account()))
+                .toList();
     }
 
     @GetMapping("/report")
@@ -34,6 +44,7 @@ public class HelpAccountController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam String account) {
+        accessControl.checkHelpAccount(account);
         return helpAccountService.report(start, end, account);
     }
 }

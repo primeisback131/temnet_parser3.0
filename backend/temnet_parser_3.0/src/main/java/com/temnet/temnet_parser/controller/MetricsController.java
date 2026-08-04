@@ -11,6 +11,8 @@ import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.security.AccessControlService;
+import com.temnet.temnet_parser.security.AccessControlService.Area;
 import com.temnet.temnet_parser.service.MetricsService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,9 +30,16 @@ import static org.springframework.format.annotation.DateTimeFormat.ISO;
 public class MetricsController {
 
     private final MetricsService metricsService;
+    private final AccessControlService accessControl;
 
-    public MetricsController(MetricsService metricsService) {
+    public MetricsController(MetricsService metricsService, AccessControlService accessControl) {
         this.metricsService = metricsService;
+        this.accessControl = accessControl;
+    }
+
+    /** Metrics are aggregates, so every endpoint here resolves the METRICS area. */
+    private com.temnet.temnet_parser.security.Scope scope(String groupName) {
+        return accessControl.scope(groupName, Area.METRICS);
     }
 
     @GetMapping("/timeseries")
@@ -39,7 +48,7 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
-        return metricsService.timeseries(start, end, groupName, Bucket.from(bucket));
+        return metricsService.timeseries(start, end, scope(groupName), Bucket.from(bucket));
     }
 
     /** Tickets still open at the end of the period (the real backlog). */
@@ -47,7 +56,7 @@ public class MetricsController {
     public BacklogReport backlog(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
-        return metricsService.backlog(end, groupName);
+        return metricsService.backlog(end, scope(groupName));
     }
 
     /** The individual tickets behind the backlog count. */
@@ -55,7 +64,7 @@ public class MetricsController {
     public List<OpenTicket> backlogTickets(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
-        return metricsService.backlogTickets(end, groupName);
+        return metricsService.backlogTickets(end, scope(groupName));
     }
 
     @GetMapping("/heatmap")
@@ -63,7 +72,7 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
-        return metricsService.heatmap(start, end, groupName);
+        return metricsService.heatmap(start, end, scope(groupName));
     }
 
     @GetMapping("/sla")
@@ -72,7 +81,7 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
-        return metricsService.sla(start, end, groupName, Bucket.from(bucket));
+        return metricsService.sla(start, end, scope(groupName), Bucket.from(bucket));
     }
 
     @GetMapping("/resolution")
@@ -81,7 +90,7 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
-        return metricsService.resolution(start, end, groupName, Bucket.from(bucket));
+        return metricsService.resolution(start, end, scope(groupName), Bucket.from(bucket));
     }
 
     @GetMapping("/reopens")
@@ -90,12 +99,12 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
-        return metricsService.reopens(start, end, groupName, Bucket.from(bucket));
+        return metricsService.reopens(start, end, scope(groupName), Bucket.from(bucket));
     }
 
     @GetMapping("/alerts")
     public AlertsReport alerts() {
-        return metricsService.alerts();
+        return metricsService.alerts(scope(null));
     }
 
     @GetMapping("/categories")
@@ -103,7 +112,7 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
-        return metricsService.categories(start, end, groupName);
+        return metricsService.categories(start, end, scope(groupName));
     }
 
     @GetMapping("/operators")
@@ -111,6 +120,6 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
-        return metricsService.operators(start, end, groupName);
+        return metricsService.operators(start, end, scope(groupName));
     }
 }

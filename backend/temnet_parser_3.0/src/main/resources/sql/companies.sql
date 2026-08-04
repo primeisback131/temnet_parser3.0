@@ -11,24 +11,31 @@ SELECT
     COALESCE(SUM(msg.total), 0)                                        AS total_messages
 FROM client_group cg
 LEFT JOIN (
-    SELECT client, COUNT(*) AS total
-    FROM message
-    WHERE created_at >= :start AND created_at < :endExclusive
-    GROUP BY client
+    SELECT m.client AS client, COUNT(*) AS total
+    FROM message m
+    WHERE m.created_at >= :start AND m.created_at < :endExclusive
+      ${scopeMessages}
+    GROUP BY m.client
 ) AS msg ON msg.client = cg.client
 LEFT JOIN (
     -- open_at_end: still open at the period boundary — opened before it and
     -- neither closed nor gone silent past the expiry threshold by then.
-    SELECT client,
-           SUM(status = 'closed' AND closed_at >= :start AND closed_at < :endExclusive)   AS closed,
-           SUM(status = 'rejected' AND closed_at >= :start AND closed_at < :endExclusive) AS rejected,
-           SUM(opened_at < :endExclusive
-               AND COALESCE(closed_at, stale_at) >= :endExclusive)                        AS open_at_end
-    FROM ticket
-    GROUP BY client
+    -- The boundary is ${backlogBoundary}: the period end capped at the data
+    -- horizon, exactly as /metrics/backlog does it. Without the cap a period
+    -- reaching past the data reports 0 (everything has gone stale) while the
+    -- metrics tile shows the real number.
+    SELECT t.client AS client,
+           SUM(t.status = 'closed' AND t.closed_at >= :start AND t.closed_at < :endExclusive)   AS closed,
+           SUM(t.status = 'rejected' AND t.closed_at >= :start AND t.closed_at < :endExclusive) AS rejected,
+           SUM(t.opened_at < ${backlogBoundary}
+               AND COALESCE(t.closed_at, t.stale_at) >= ${backlogBoundary})                     AS open_at_end
+    FROM ticket t
+    WHERE 1 = 1 ${scopeTickets}
+    GROUP BY t.client
 ) AS tk ON tk.client = cg.client
 WHERE cg.grp NOT LIKE 'help%'
   AND cg.grp != 'all'
+  ${scopeFilter}
 GROUP BY cg.grp
 HAVING total_messages > 0
 ORDER BY group_name

@@ -21,12 +21,23 @@ public class UserStatsRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    public List<UserStat> findReport(LocalDate start, LocalDate end, String groupName) {
+    public List<UserStat> findReport(LocalDate start, LocalDate end, String groupName,
+                                     com.temnet.temnet_parser.security.Scope scope) {
+        if (scope.isEmpty()) {
+            return List.of();
+        }
         // The end date is inclusive: half-open [start, end+1day) interval.
-        return jdbcClient.sql(SQL)
-                .param("start", start)
-                .param("endExclusive", end.plusDays(1))
-                .param("groupName", groupName)
+        // Open-ticket counts additionally cap the boundary at the data horizon,
+        // exactly as /metrics/backlog does — otherwise the same period shows a
+        // number here and zero there.
+        String sql = SQL
+                .replace("${backlogBoundary}", DataHorizon.CAPPED_END)
+                .replace("${scopeMessages}", ScopeSql.messages("m", scope))
+                .replace("${scopeTickets}", ScopeSql.tickets("t", scope));
+        return ScopeSql.bind(jdbcClient.sql(sql)
+                        .param("start", start)
+                        .param("endExclusive", end.plusDays(1))
+                        .param("groupName", groupName), scope)
                 .query(new DataClassRowMapper<>(UserStat.class))
                 .list();
     }

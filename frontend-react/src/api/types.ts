@@ -1,3 +1,61 @@
+/**
+ * Account role. `admin` sees and manages everything, `manager` gets the
+ * metrics of the groups granted to them, `user` is read-only: only the company
+ * and per-user statistics, without metrics, chats or Excel export.
+ */
+export type Role = "admin" | "manager" | "user";
+
+/** The signed-in user and what they may see. */
+export interface CurrentUser {
+  username: string;
+  fullName: string | null;
+  role: Role;
+  unrestricted: boolean; // administrator: every group, present and future
+  metricsGroups: string[];
+  chatGroups: string[];
+  helpAccounts: string[];
+}
+
+/** A help account and the groups a grant on it expands to. */
+export interface HelpAccountScope {
+  account: string;
+  groups: string[];
+}
+
+/** One granted scope: a whole help account, or a single client group. */
+export interface Grant {
+  scopeType: "help_account" | "group";
+  scopeValue: string;
+  canMetrics: boolean;
+  canChats: boolean;
+}
+
+export interface UserAccount {
+  id: number;
+  username: string;
+  fullName: string | null;
+  role: Role;
+  enabled: boolean;
+  createdAt: string;
+  grants: Grant[];
+}
+
+export interface UserCreateRequest {
+  username: string;
+  password: string;
+  fullName: string | null;
+  role: Role;
+  enabled: boolean;
+  grants: Grant[];
+}
+
+export interface UserUpdateRequest {
+  fullName: string | null;
+  role: Role;
+  enabled: boolean;
+  grants: Grant[];
+}
+
 export interface Group {
   groupName: string;
 }
@@ -171,4 +229,36 @@ export interface OperatorStat {
   rejected: number;
   clients: number;
   avgReplySeconds: number | null;
+}
+
+/** Result of one finished sync run. */
+export interface SyncSummary {
+  fullRebuild: boolean;
+  scannedRows: number;
+  newMessages: number;
+  llmClassified: number;
+  watermark: number;
+  durationMs: number;
+}
+
+/** Current (or last) sync run — polled while a rebuild is in flight. */
+export interface SyncRun {
+  kind: "scheduled" | "incremental" | "rebuild";
+  startedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
+  running: boolean;
+  summary: SyncSummary | null;
+  error: string | null;
+}
+
+/** GET /admin/sync/status — DB counters keep their SQL column names. */
+export interface SyncStatus {
+  last_archive_id: number;
+  last_run_at: string | null;
+  messages_total: number;
+  tickets: { status: string; count: number }[];
+  reopens: number;
+  reopenLlm: { verdict: string; count: number }[];
+  run: SyncRun | null;
 }

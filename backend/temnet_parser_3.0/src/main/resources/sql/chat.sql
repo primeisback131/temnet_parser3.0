@@ -1,5 +1,7 @@
 -- Support chat history for one group's clients, already deduped and
--- author-attributed by the ingest.
+-- author-attributed by the ingest. ${scopeMessages} keeps a desk to its own
+-- correspondence: two desks can serve the same client, and neither may read
+-- the other's conversation with them.
 SELECT
     m.author     AS sender,
     m.recipient  AS recipient,
@@ -8,6 +10,5 @@ SELECT
 FROM message m
 WHERE m.created_at >= :start
   AND m.created_at < :endExclusive
-  AND EXISTS (SELECT 1 FROM client_group cg
-              WHERE cg.client = m.client AND cg.grp = :groupName)
+  ${scopeMessages}
 ORDER BY m.created_at

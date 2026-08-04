@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useCompanies, useHelpAccounts } from "../api/queries";
 import type { Company, HelpAccountReport } from "../api/types";
+import { useAuth } from "../auth";
 import { defaultRange, monthlyRanges, toApiDate } from "../lib/date";
 import {
   exportToExcel,
@@ -131,8 +132,11 @@ export default function CompaniesPage() {
 
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
+  const { canExport } = useAuth();
   const { data = [], isFetching } = useCompanies(startStr, endStr);
-  const { data: helpAccounts = [] } = useHelpAccounts();
+  // The desk list only feeds the report picker, and /help-accounts is closed to
+  // read-only accounts — asking for it would just earn a 403.
+  const { data: helpAccounts = [] } = useHelpAccounts(canExport);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return data;
@@ -226,36 +230,38 @@ export default function CompaniesPage() {
           onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
           allowClear={false}
         />
-        <Space wrap>
-          <Select
-            placeholder="Help-аккаунт"
-            allowClear
-            showSearch
-            style={{ width: 200 }}
-            value={helpAccount}
-            onChange={(v) => setHelpAccount(v ?? null)}
-            options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
-          />
-          <Tooltip title="Отчёт по всем организациям выбранного help-аккаунта: все метрики по группам (первый ответ, время решения, повторы, динамика, категории) + лист на каждую группу пользователей. За период больше месяца — zip-архив с отчётом за каждый месяц">
-            <Button
-              icon={<FileExcelOutlined />}
-              onClick={exportHelpReport}
-              loading={exporting}
-              disabled={!helpAccount}
-            >
-              Отчёт по help
-            </Button>
-          </Tooltip>
-          <Tooltip title="Экспорт таблицы">
-            <Button
-              icon={<FileExcelOutlined />}
-              onClick={() => exportToExcel(filtered, `groups_${startStr}_${endStr}.xlsx`, "Группы")}
-              disabled={filtered.length === 0}
-            >
-              Excel
-            </Button>
-          </Tooltip>
-        </Space>
+        {canExport && (
+          <Space wrap>
+            <Select
+              placeholder="Help-аккаунт"
+              allowClear
+              showSearch
+              style={{ width: 200 }}
+              value={helpAccount}
+              onChange={(v) => setHelpAccount(v ?? null)}
+              options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
+            />
+            <Tooltip title="Отчёт по всем организациям выбранного help-аккаунта: все метрики по группам (первый ответ, время решения, повторы, динамика, категории) + лист на каждую группу пользователей. За период больше месяца — zip-архив с отчётом за каждый месяц">
+              <Button
+                icon={<FileExcelOutlined />}
+                onClick={exportHelpReport}
+                loading={exporting}
+                disabled={!helpAccount}
+              >
+                Отчёт по help
+              </Button>
+            </Tooltip>
+            <Tooltip title="Экспорт таблицы">
+              <Button
+                icon={<FileExcelOutlined />}
+                onClick={() => exportToExcel(filtered, `groups_${startStr}_${endStr}.xlsx`, "Группы")}
+                disabled={filtered.length === 0}
+              >
+                Excel
+              </Button>
+            </Tooltip>
+          </Space>
+        )}
       </Space>
       <Table
         rowKey="groupName"

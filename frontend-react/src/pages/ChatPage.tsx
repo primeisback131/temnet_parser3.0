@@ -27,7 +27,7 @@ export default function ChatPage() {
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
 
-  const { data: groups = [] } = useGroups();
+  const { data: groups = [] } = useGroups("chats");
   const { data: users = [] } = useUsers(startStr, endStr, group);
   const { data: chats = [], isFetching } = useChats(startStr, endStr, group);
 

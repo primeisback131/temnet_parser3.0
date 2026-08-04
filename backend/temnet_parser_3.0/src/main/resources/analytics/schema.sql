@@ -76,6 +76,13 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resolution_seconds BIGINT NULL AFTER
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS stale_at DATETIME NULL AFTER last_activity;
 ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_stale (stale_at);
 
+-- The support desk that handled the ticket: the account the client wrote to
+-- when opening it. Access is granted per help account, so every ticket-level
+-- query filters on this — a desk must not see another desk's work even when
+-- both serve the same organization (a client can talk to two desks).
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS account VARCHAR(191) NULL AFTER client;
+ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_account (account);
+
 -- LLM verdict for ambiguous reopen candidates (no marker words, different
 -- category): 'pending' -> awaiting classification, 'same' -> confirmed the
 -- same issue, 'new' -> a different issue. NULL for non-candidates and for
@@ -90,6 +97,48 @@ CREATE TABLE IF NOT EXISTS llm_verdict (
     opened_at DATETIME NOT NULL,
     verdict   VARCHAR(10) NOT NULL,
     PRIMARY KEY (client, opened_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Which client groups each help account actually serves, derived from the
+-- conversations. Materialized by the sync job: deriving it on the fly costs
+-- ~3 s (full scan of `message`), far too slow for an authorization check on
+-- every request. Grants of type 'help_account' expand through this table.
+CREATE TABLE IF NOT EXISTS help_account_group (
+    account VARCHAR(191) NOT NULL,
+    grp     VARCHAR(191) NOT NULL,
+    PRIMARY KEY (account, grp)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Application accounts. Passwords are bcrypt hashes; `admin` sees everything
+-- and manages users, `manager` sees the metrics of what user_grant allows, and
+-- `user` is read-only: the company and per-user tables of its groups, without
+-- the metrics dashboard, the chats or the Excel report.
+CREATE TABLE IF NOT EXISTS app_user (
+    id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+    username      VARCHAR(64) NOT NULL,
+    password_hash VARCHAR(100) NOT NULL,
+    full_name     VARCHAR(191) NULL,
+    role          ENUM('admin','manager','user') NOT NULL DEFAULT 'manager',
+    enabled       TINYINT(1) NOT NULL DEFAULT 1,
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_app_user_username (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Installs created before the read-only role exist with the two-value enum;
+-- MODIFY re-states the whole column, so re-running it is a no-op.
+ALTER TABLE app_user MODIFY COLUMN role ENUM('admin','manager','user') NOT NULL DEFAULT 'manager';
+
+-- One granted scope: a whole help account (expanded via help_account_group)
+-- or a single client group. Metrics and chat access are granted separately —
+-- chats expose the correspondence itself, aggregates do not.
+CREATE TABLE IF NOT EXISTS user_grant (
+    user_id     BIGINT NOT NULL,
+    scope_type  ENUM('help_account','group') NOT NULL,
+    scope_value VARCHAR(191) NOT NULL,
+    can_metrics TINYINT(1) NOT NULL DEFAULT 1,
+    can_chats   TINYINT(1) NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, scope_type, scope_value),
+    CONSTRAINT fk_user_grant_user FOREIGN KEY (user_id) REFERENCES app_user (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Group membership copied from the dump (sr_user), so analytics queries never

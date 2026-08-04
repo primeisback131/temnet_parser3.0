@@ -12,6 +12,7 @@ import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.security.Scope;
 import com.temnet.temnet_parser.support.SqlLoader;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
@@ -41,21 +42,6 @@ public class MetricsRepository {
     private static final String BACKLOG_SQL = SqlLoader.load("sql/backlog.sql");
     private static final String BACKLOG_TICKETS_SQL = SqlLoader.load("sql/backlog_tickets.sql");
 
-    /**
-     * The requested period end, capped at the data horizon (freshest ingested
-     * message). Backlog-style metrics must not report past the data: with no
-     * new messages every open ticket goes stale within 20 working hours, so an
-     * uncapped answer slides to zero and reads as "nothing open" rather than
-     * "nothing known".
-     * <p>
-     * The cap is the last message's second PLUS ONE, keeping the boundary
-     * exclusive like the midnight one it replaces: everything that happened up
-     * to and including the final message counts, and a ticket closed by that
-     * very message is not left hanging in the backlog.
-     */
-    private static final String DATA_HORIZON_END =
-            "COALESCE(LEAST(:endExclusive, (SELECT MAX(created_at) + INTERVAL 1 SECOND FROM message)),"
-                    + " :endExclusive)";
 
     // Outlier guards, in WORKING seconds (must match the 10-hour business day
     // of BusinessTime): first responses over one working day and resolutions
@@ -81,20 +67,19 @@ public class MetricsRepository {
      * Message volume and ticket outcomes over time. The end date is treated
      * as inclusive (half-open {@code [start, end+1day)} interval).
      */
-    public List<MetricPoint> timeseries(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<MetricPoint> timeseries(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
 
         String sql = TIMESERIES_SQL
                 .replace("${bucketMessages}", bucket.expression("m.created_at"))
                 .replace("${bucketClosed}", bucket.expression("t.closed_at"))
                 .replace("${bucketOpened}", bucket.expression("t.opened_at"))
                 .replace("${bucketResolved}", bucket.expression("COALESCE(t.closed_at, t.stale_at)"))
-                .replace("${effectiveEnd}", DATA_HORIZON_END)
-                .replace("${membershipMessages}", membership("m", hasGroup))
-                .replace("${membershipTickets}", membership("t", hasGroup))
-                .replace("${membershipBaseline}", membership("t", hasGroup));
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${membershipMessages}", ScopeSql.messages("m", scope))
+                .replace("${membershipTickets}", ScopeSql.tickets("t", scope))
+                .replace("${membershipBaseline}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .query(new DataClassRowMapper<>(MetricPoint.class)).list();
     }
 
@@ -105,106 +90,92 @@ public class MetricsRepository {
      * The boundary is capped at the data horizon; the returned {@code asOf}
      * says which moment the answer describes.
      */
-    public BacklogReport backlog(LocalDate end, String groupName) {
-        boolean hasGroup = hasGroup(groupName);
+    public BacklogReport backlog(LocalDate end, Scope scope) {
 
-        String sql = BACKLOG_SQL.replace("${membership}", membership("t", hasGroup));
+        String sql = BACKLOG_SQL.replace("${membership}", ScopeSql.tickets("t", scope));
 
-        var spec = analytics.sql(sql).param("endExclusive", end.plusDays(1));
-        if (hasGroup) {
-            spec = spec.param("groupName", groupName);
-        }
-        return spec.query(new DataClassRowMapper<>(BacklogReport.class)).single();
+        return ScopeSql.bind(analytics.sql(sql).param("endExclusive", end.plusDays(1)), scope)
+                .query(new DataClassRowMapper<>(BacklogReport.class)).single();
     }
 
     /** The individual tickets behind {@link #backlog}, for manual checking. */
-    public List<OpenTicket> backlogTickets(LocalDate end, String groupName) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<OpenTicket> backlogTickets(LocalDate end, Scope scope) {
 
         String sql = BACKLOG_TICKETS_SQL
-                .replace("${effectiveEnd}", DATA_HORIZON_END)
-                .replace("${membership}", membership("t", hasGroup));
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${membership}", ScopeSql.tickets("t", scope));
 
-        var spec = analytics.sql(sql).param("endExclusive", end.plusDays(1));
-        if (hasGroup) {
-            spec = spec.param("groupName", groupName);
-        }
-        return spec.query(new DataClassRowMapper<>(OpenTicket.class)).list();
+        return ScopeSql.bind(analytics.sql(sql).param("endExclusive", end.plusDays(1)), scope)
+                .query(new DataClassRowMapper<>(OpenTicket.class)).list();
     }
 
     /** Message counts bucketed by weekday (0=Mon) and hour of day. */
-    public List<HeatmapCell> heatmap(LocalDate start, LocalDate end, String groupName) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<HeatmapCell> heatmap(LocalDate start, LocalDate end, Scope scope) {
 
-        String sql = HEATMAP_SQL.replace("${membership}", membership("m", hasGroup));
+        String sql = HEATMAP_SQL.replace("${membership}", ScopeSql.messages("m", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .query(new DataClassRowMapper<>(HeatmapCell.class)).list();
     }
 
     /** First-response time (working seconds) per time bucket. */
-    public List<SlaPoint> sla(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<SlaPoint> sla(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
 
         String anchor = nextWorkingDay("t.opened_at");
         String sql = SLA_SQL
                 .replace("${bucket}", bucket.expression(anchor))
                 .replace("${anchor}", anchor)
-                .replace("${groupFilter}", clientInGroup("t", hasGroup));
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .param("maxFrtSeconds", MAX_FRT_SECONDS)
                 .query(new DataClassRowMapper<>(SlaPoint.class)).list();
     }
 
     /** Ticket resolution time (working seconds) per time bucket. */
-    public List<ResolutionPoint> resolution(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<ResolutionPoint> resolution(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
 
         String anchor = nextWorkingDay("t.closed_at");
         String sql = RESOLUTION_SQL
                 .replace("${bucket}", bucket.expression(anchor))
                 .replace("${anchor}", anchor)
-                .replace("${groupFilter}", clientInGroup("t", hasGroup));
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .param("maxResolutionSeconds", MAX_RESOLUTION_SECONDS)
                 .query(new DataClassRowMapper<>(ResolutionPoint.class)).list();
     }
 
     /** Ticket counts per problem category. */
-    public List<CategoryCount> categories(LocalDate start, LocalDate end, String groupName) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<CategoryCount> categories(LocalDate start, LocalDate end, Scope scope) {
 
-        String sql = CATEGORIES_SQL.replace("${groupFilter}", clientInGroup("t", hasGroup));
+        String sql = CATEGORIES_SQL.replace("${groupFilter}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .query(new DataClassRowMapper<>(CategoryCount.class)).list();
     }
 
     /** Per-operator leaderboard for the period (optionally limited to a group's clients). */
-    public List<OperatorStat> operators(LocalDate start, LocalDate end, String groupName) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<OperatorStat> operators(LocalDate start, LocalDate end, Scope scope) {
 
         String sql = OPERATORS_SQL
-                .replace("${groupFilterMessages}", clientInGroup("m", hasGroup))
-                .replace("${groupFilterTickets}", clientInGroup("t", hasGroup));
+                .replace("${groupFilterMessages}", ScopeSql.messages("m", scope))
+                .replace("${groupFilterTickets}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .param("maxReplySeconds", MAX_FRT_SECONDS)
                 .query(new DataClassRowMapper<>(OperatorStat.class)).list();
     }
 
     /** Repeat requests (probable/confirmed reopens) vs closures per bucket. */
-    public List<ReopenPoint> reopens(LocalDate start, LocalDate end, String groupName, Bucket bucket) {
-        boolean hasGroup = hasGroup(groupName);
+    public List<ReopenPoint> reopens(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
 
         String sql = REOPENS_SQL
                 .replace("${bucketClosed}", bucket.expression("t.closed_at"))
                 .replace("${bucketOpened}", bucket.expression("t.opened_at"))
-                .replace("${groupFilter}", clientInGroup("t", hasGroup));
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope));
 
-        return withRange(sql, start, end, hasGroup ? groupName : null)
+        return withRange(sql, start, end, scope)
                 .query(new DataClassRowMapper<>(ReopenPoint.class)).list();
     }
 
@@ -289,30 +260,16 @@ public class MetricsRepository {
         return Math.round(value * 10.0) / 10.0;
     }
 
-    private JdbcClient.StatementSpec withRange(String sql, LocalDate start, LocalDate end, String groupName) {
-        var spec = analytics.sql(sql)
-                .param("start", start)
-                .param("endExclusive", end.plusDays(1));
-        if (groupName != null) {
-            spec = spec.param("groupName", groupName);
-        }
-        return spec;
+    private JdbcClient.StatementSpec withRange(String sql, LocalDate start, LocalDate end, Scope scope) {
+        return ScopeSql.bind(analytics.sql(sql).param("start", start).param("endExclusive", end.plusDays(1)), scope);
     }
 
-    private static boolean hasGroup(String groupName) {
-        return groupName != null && !groupName.isBlank();
-    }
 
     /**
      * Membership scope for message/ticket volume queries: only clients that
      * belong to a real company group, each row counted once (EXISTS, no join
      * multiplication for clients in several groups).
      */
-    private static String membership(String alias, boolean hasGroup) {
-        return "AND EXISTS (SELECT 1 FROM client_group cg WHERE cg.client = " + alias
-                + ".client AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all'"
-                + (hasGroup ? " AND cg.grp = :groupName" : "") + ")";
-    }
 
     /**
      * The given datetime column shifted off weekends to the next Monday.
@@ -328,10 +285,4 @@ public class MetricsRepository {
     }
 
     /** Optional group filter for ticket-level queries. */
-    private static String clientInGroup(String alias, boolean hasGroup) {
-        return hasGroup
-                ? "AND EXISTS (SELECT 1 FROM client_group cg WHERE cg.client = " + alias
-                        + ".client AND cg.grp = :groupName)"
-                : "";
-    }
 }
