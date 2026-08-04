@@ -199,7 +199,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `UserStatsController` | `GET /users` |
 | `HelpAccountController` | `GET /help-accounts`, `GET /help-accounts/report` |
 | `ChatController` | `GET /chat`, `GET /chat/chatlist` |
-| `MetricsController` | `GET /metrics/{timeseries,heatmap,sla,resolution,reopens,alerts,categories,operators}` |
+| `MetricsController` | `GET /metrics/{timeseries,backlog,heatmap,sla,resolution,reopens,alerts,categories,operators}` |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` |
 
 ### DTO (`dto/`)

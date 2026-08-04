@@ -53,6 +53,23 @@ export function useTimeseries(
   });
 }
 
+/** Tickets still open at the end of the period (the real backlog). */
+export function useBacklog(end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["backlog", end, groupName],
+    queryFn: () => api.getBacklog(end, groupName ?? undefined),
+  });
+}
+
+/** The individual tickets behind the backlog count; fetched on demand. */
+export function useBacklogTickets(end: string, groupName: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["backlogTickets", end, groupName],
+    queryFn: () => api.getBacklogTickets(end, groupName ?? undefined),
+    enabled,
+  });
+}
+
 export function useHeatmap(start: string, end: string, groupName: string | null) {
   return useQuery({
     queryKey: ["heatmap", start, end, groupName],

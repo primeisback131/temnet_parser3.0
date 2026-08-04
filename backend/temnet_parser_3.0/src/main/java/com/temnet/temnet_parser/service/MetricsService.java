@@ -1,10 +1,12 @@
 package com.temnet.temnet_parser.service;
 
 import com.temnet.temnet_parser.dto.AlertsReport;
+import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
@@ -36,6 +38,18 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.timeseries(start, end, groupName, bucket);
+    }
+
+    /** Tickets still open at the end of the period (the real backlog). */
+    @Cacheable("backlog")
+    public BacklogReport backlog(LocalDate end, String groupName) {
+        return metricsRepository.backlog(end, groupName);
+    }
+
+    /** The individual tickets behind {@link #backlog}, for manual checking. */
+    @Cacheable("backlogTickets")
+    public List<OpenTicket> backlogTickets(LocalDate end, String groupName) {
+        return metricsRepository.backlogTickets(end, groupName);
     }
 
     @Cacheable("heatmap")

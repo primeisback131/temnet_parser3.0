@@ -2,10 +2,12 @@ package com.temnet.temnet_parser.repository;
 
 import com.temnet.temnet_parser.dto.Alert;
 import com.temnet.temnet_parser.dto.AlertsReport;
+import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
@@ -36,6 +38,24 @@ public class MetricsRepository {
     private static final String OPERATORS_SQL = SqlLoader.load("sql/operators.sql");
     private static final String RESOLUTION_SQL = SqlLoader.load("sql/resolution.sql");
     private static final String REOPENS_SQL = SqlLoader.load("sql/reopens.sql");
+    private static final String BACKLOG_SQL = SqlLoader.load("sql/backlog.sql");
+    private static final String BACKLOG_TICKETS_SQL = SqlLoader.load("sql/backlog_tickets.sql");
+
+    /**
+     * The requested period end, capped at the data horizon (freshest ingested
+     * message). Backlog-style metrics must not report past the data: with no
+     * new messages every open ticket goes stale within 20 working hours, so an
+     * uncapped answer slides to zero and reads as "nothing open" rather than
+     * "nothing known".
+     * <p>
+     * The cap is the last message's second PLUS ONE, keeping the boundary
+     * exclusive like the midnight one it replaces: everything that happened up
+     * to and including the final message counts, and a ticket closed by that
+     * very message is not left hanging in the backlog.
+     */
+    private static final String DATA_HORIZON_END =
+            "COALESCE(LEAST(:endExclusive, (SELECT MAX(created_at) + INTERVAL 1 SECOND FROM message)),"
+                    + " :endExclusive)";
 
     // Outlier guards, in WORKING seconds (must match the 10-hour business day
     // of BusinessTime): first responses over one working day and resolutions
@@ -67,12 +87,49 @@ public class MetricsRepository {
         String sql = TIMESERIES_SQL
                 .replace("${bucketMessages}", bucket.expression("m.created_at"))
                 .replace("${bucketClosed}", bucket.expression("t.closed_at"))
-                .replace("${bucketInProgress}", bucket.expression("t.in_progress_at"))
+                .replace("${bucketOpened}", bucket.expression("t.opened_at"))
+                .replace("${bucketResolved}", bucket.expression("COALESCE(t.closed_at, t.stale_at)"))
+                .replace("${effectiveEnd}", DATA_HORIZON_END)
                 .replace("${membershipMessages}", membership("m", hasGroup))
-                .replace("${membershipTickets}", membership("t", hasGroup));
+                .replace("${membershipTickets}", membership("t", hasGroup))
+                .replace("${membershipBaseline}", membership("t", hasGroup));
 
         return withRange(sql, start, end, hasGroup ? groupName : null)
                 .query(new DataClassRowMapper<>(MetricPoint.class)).list();
+    }
+
+    /**
+     * Tickets still open at the END of the period — the real backlog. Counted
+     * against COALESCE(closed_at, stale_at), so tickets abandoned by silent
+     * clients (which keep status 'open', expiry being lazy) do not inflate it.
+     * The boundary is capped at the data horizon; the returned {@code asOf}
+     * says which moment the answer describes.
+     */
+    public BacklogReport backlog(LocalDate end, String groupName) {
+        boolean hasGroup = hasGroup(groupName);
+
+        String sql = BACKLOG_SQL.replace("${membership}", membership("t", hasGroup));
+
+        var spec = analytics.sql(sql).param("endExclusive", end.plusDays(1));
+        if (hasGroup) {
+            spec = spec.param("groupName", groupName);
+        }
+        return spec.query(new DataClassRowMapper<>(BacklogReport.class)).single();
+    }
+
+    /** The individual tickets behind {@link #backlog}, for manual checking. */
+    public List<OpenTicket> backlogTickets(LocalDate end, String groupName) {
+        boolean hasGroup = hasGroup(groupName);
+
+        String sql = BACKLOG_TICKETS_SQL
+                .replace("${effectiveEnd}", DATA_HORIZON_END)
+                .replace("${membership}", membership("t", hasGroup));
+
+        var spec = analytics.sql(sql).param("endExclusive", end.plusDays(1));
+        if (hasGroup) {
+            spec = spec.param("groupName", groupName);
+        }
+        return spec.query(new DataClassRowMapper<>(OpenTicket.class)).list();
     }
 
     /** Message counts bucketed by weekday (0=Mon) and hour of day. */

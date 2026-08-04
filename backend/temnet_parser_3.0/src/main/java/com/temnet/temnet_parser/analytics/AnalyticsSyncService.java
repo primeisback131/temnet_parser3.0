@@ -544,11 +544,11 @@ public class AnalyticsSyncService {
             GeneratedKeyHolder keys = new GeneratedKeyHolder();
             analytics.update(con -> {
                 PreparedStatement ps = con.prepareStatement("""
-                                INSERT INTO ticket (client, opened_at, last_activity, first_response_at, first_responder,
-                                                    frt_seconds, in_progress_at, closed_at, closed_by, resolution_seconds,
-                                                    status, category, category_rank, messages_in, messages_out,
-                                                    reopened_from, reopen_score, reopen_llm)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                INSERT INTO ticket (client, opened_at, last_activity, stale_at, first_response_at,
+                                                    first_responder, frt_seconds, in_progress_at, closed_at, closed_by,
+                                                    resolution_seconds, status, category, category_rank, messages_in,
+                                                    messages_out, reopened_from, reopen_score, reopen_llm)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -560,14 +560,15 @@ public class AnalyticsSyncService {
         void flushDirty() {
             for (Ticket t : dirty) {
                 analytics.update("""
-                                UPDATE ticket SET last_activity = ?, first_response_at = ?, first_responder = ?,
-                                                  frt_seconds = ?, in_progress_at = ?, closed_at = ?, closed_by = ?,
-                                                  resolution_seconds = ?, status = ?, category = ?, category_rank = ?,
-                                                  messages_in = ?, messages_out = ?, reopened_from = ?, reopen_score = ?,
-                                                  reopen_llm = ?
+                                UPDATE ticket SET last_activity = ?, stale_at = ?, first_response_at = ?,
+                                                  first_responder = ?, frt_seconds = ?, in_progress_at = ?,
+                                                  closed_at = ?, closed_by = ?, resolution_seconds = ?, status = ?,
+                                                  category = ?, category_rank = ?, messages_in = ?, messages_out = ?,
+                                                  reopened_from = ?, reopen_score = ?, reopen_llm = ?
                                 WHERE id = ?
                                 """,
                         Timestamp.valueOf(t.lastActivity),
+                        Timestamp.valueOf(staleAt(t)),
                         toTimestamp(t.firstResponseAt),
                         t.firstResponder,
                         t.frtSeconds,
@@ -592,21 +593,31 @@ public class AnalyticsSyncService {
             ps.setString(1, t.client);
             ps.setTimestamp(2, Timestamp.valueOf(t.openedAt));
             ps.setTimestamp(3, Timestamp.valueOf(t.lastActivity));
-            ps.setTimestamp(4, toTimestamp(t.firstResponseAt));
-            ps.setString(5, t.firstResponder);
-            setNullableLong(ps, 6, t.frtSeconds);
-            ps.setTimestamp(7, toTimestamp(t.inProgressAt));
-            ps.setTimestamp(8, toTimestamp(t.closedAt));
-            ps.setString(9, t.closedBy);
-            setNullableLong(ps, 10, t.resolutionSeconds);
-            ps.setString(11, t.status);
-            ps.setString(12, CategoryRules.nameOf(t.categoryRank));
-            ps.setInt(13, t.categoryRank);
-            ps.setInt(14, t.messagesIn);
-            ps.setInt(15, t.messagesOut);
-            setNullableLong(ps, 16, t.reopenedFrom);
-            ps.setInt(17, t.reopenScore);
-            ps.setString(18, t.reopenLlm);
+            ps.setTimestamp(4, Timestamp.valueOf(staleAt(t)));
+            ps.setTimestamp(5, toTimestamp(t.firstResponseAt));
+            ps.setString(6, t.firstResponder);
+            setNullableLong(ps, 7, t.frtSeconds);
+            ps.setTimestamp(8, toTimestamp(t.inProgressAt));
+            ps.setTimestamp(9, toTimestamp(t.closedAt));
+            ps.setString(10, t.closedBy);
+            setNullableLong(ps, 11, t.resolutionSeconds);
+            ps.setString(12, t.status);
+            ps.setString(13, CategoryRules.nameOf(t.categoryRank));
+            ps.setInt(14, t.categoryRank);
+            ps.setInt(15, t.messagesIn);
+            ps.setInt(16, t.messagesOut);
+            setNullableLong(ps, 17, t.reopenedFrom);
+            ps.setInt(18, t.reopenScore);
+            ps.setString(19, t.reopenLlm);
+        }
+
+        /**
+         * When this ticket's silence would cross the expiry threshold — derived
+         * from lastActivity on every write, so the column can never drift from
+         * the value {@link #applyInbound} compares against.
+         */
+        private LocalDateTime staleAt(Ticket t) {
+            return BusinessTime.plusBusinessSeconds(t.lastActivity, STALE_OPEN_SECONDS);
         }
 
         private void setNullableLong(PreparedStatement ps, int index, Long value) throws java.sql.SQLException {

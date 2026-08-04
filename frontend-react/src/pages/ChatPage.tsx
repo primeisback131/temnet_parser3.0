@@ -2,6 +2,7 @@ import { FileExcelOutlined, UserOutlined } from "@ant-design/icons";
 import { Avatar, Button, Card, DatePicker, Empty, Input, List, Select, Space, Spin, Tooltip } from "antd";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useChats, useGroups, useUsers } from "../api/queries";
 import type { ChatMessage } from "../api/types";
 import { defaultRange, toApiDate } from "../lib/date";
@@ -10,9 +11,16 @@ import { exportToExcel } from "../lib/excel";
 const { RangePicker } = DatePicker;
 
 export default function ChatPage() {
-  const [[start, end], setRange] = useState(defaultRange);
-  const [group, setGroup] = useState<string | null>(null);
-  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  // Deep links from other screens (e.g. the open-ticket list) preselect the
+  // conversation: /chat?group=X&user=Y&start=…&end=…
+  const [params] = useSearchParams();
+  const [[start, end], setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs]>(() => {
+    const from = params.get("start");
+    const to = params.get("end");
+    return from && to ? [dayjs(from), dayjs(to)] : defaultRange();
+  });
+  const [group, setGroup] = useState<string | null>(params.get("group"));
+  const [selectedUser, setSelectedUser] = useState<string | null>(params.get("user"));
   const [userSearch, setUserSearch] = useState("");
   const [messageSearch, setMessageSearch] = useState("");
 

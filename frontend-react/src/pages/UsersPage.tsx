@@ -13,7 +13,7 @@ const columns: ColumnsType<UserStat> = [
   { title: "Имя пользователя", dataIndex: "userName", sorter: (a, b) => a.userName.localeCompare(b.userName) },
   { title: "Закрытых заявок", dataIndex: "closedRequests", sorter: (a, b) => a.closedRequests - b.closedRequests },
   { title: "Отклоненных заявок", dataIndex: "rejectedRequests", sorter: (a, b) => a.rejectedRequests - b.rejectedRequests },
-  { title: "Заявок в работе", dataIndex: "requestsInProgress", sorter: (a, b) => a.requestsInProgress - b.requestsInProgress },
+  { title: "Открытых на конец периода", dataIndex: "openRequests", sorter: (a, b) => a.openRequests - b.openRequests },
   { title: "Всего сообщений", dataIndex: "totalMessages", sorter: (a, b) => a.totalMessages - b.totalMessages },
 ];
 

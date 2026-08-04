@@ -66,6 +66,16 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS first_responder VARCHAR(191) NULL AF
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS frt_seconds BIGINT NULL AFTER first_responder;
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resolution_seconds BIGINT NULL AFTER closed_by;
 
+-- The moment a ticket's silence crosses the expiry threshold: last_activity
+-- plus 20 WORKING hours, precomputed at ingest (business-time arithmetic can
+-- not be done reliably in SQL). It is the ticket's "death by silence" time,
+-- so COALESCE(closed_at, stale_at) is the moment a ticket stopped being open
+-- whatever its status — that is what the open-backlog metric counts against.
+-- Needed because expiry is LAZY: the engine only marks a ticket 'expired'
+-- when the client writes again, so abandoned tickets stay 'open' forever.
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS stale_at DATETIME NULL AFTER last_activity;
+ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_stale (stale_at);
+
 -- LLM verdict for ambiguous reopen candidates (no marker words, different
 -- category): 'pending' -> awaiting classification, 'same' -> confirmed the
 -- same issue, 'new' -> a different issue. NULL for non-candidates and for

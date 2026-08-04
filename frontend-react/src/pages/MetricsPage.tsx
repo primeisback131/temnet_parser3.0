@@ -1,11 +1,15 @@
 import { FileExcelOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Empty, Row, Segmented, Select, Space, Statistic, Tag, Tooltip } from "antd";
+import { Button, Card, Col, DatePicker, Empty, Modal, Row, Segmented, Select, Space, Statistic, Table, Tag, Tooltip } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import {
   useAlerts,
+  useBacklog,
+  useBacklogTickets,
   useCategories,
   useGroups,
   useHeatmap,
@@ -14,10 +18,10 @@ import {
   useSla,
   useTimeseries,
 } from "../api/queries";
-import type { Bucket } from "../api/types";
+import type { Bucket, OpenTicket } from "../api/types";
 import EChart from "../components/EChart";
 import { defaultRange, toApiDate } from "../lib/date";
-import { exportWorkbook } from "../lib/excel";
+import { exportToExcel, exportWorkbook } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
 
 const { RangePicker } = DatePicker;
@@ -26,7 +30,7 @@ const COLORS = {
   messages: "#3e79f7",
   closed: "#21b573",
   rejected: "#ff6b72",
-  inProgress: "#ffa940",
+  backlog: "#ffa940",
 };
 
 export default function MetricsPage() {
@@ -45,6 +49,90 @@ export default function MetricsPage() {
   const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
   const { data: reopens = [], isFetching: reopensLoading } = useReopens(startStr, endStr, bucket, group);
   const { data: alertsReport } = useAlerts();
+  const { data: backlog } = useBacklog(endStr, group);
+  // The period reaches past the data: the count describes the last day with
+  // messages, not the requested end.
+  const backlogClamped = backlog != null && dayjs(backlog.asOf).isBefore(dayjs(endStr), "day");
+  const [openTicketsShown, setOpenTicketsShown] = useState(false);
+  const { data: openTickets = [], isFetching: openTicketsLoading } = useBacklogTickets(
+    endStr,
+    group,
+    openTicketsShown,
+  );
+
+  /** Deep link to the conversation of an open ticket, on the chat screen. */
+  const chatLink = (t: OpenTicket) => {
+    // A client can belong to several groups; the chat screen shows one at a time.
+    const chatGroup = group ?? t.groupNames?.split(",")[0]?.trim() ?? "";
+    const params = new URLSearchParams({
+      group: chatGroup,
+      user: t.client,
+      start: dayjs(t.openedAt).format("YYYY-MM-DD"),
+      end: endStr,
+    });
+    return `/chat?${params}`;
+  };
+
+  const openTicketColumns: ColumnsType<OpenTicket> = [
+    {
+      title: "Клиент",
+      dataIndex: "client",
+      sorter: (a, b) => a.client.localeCompare(b.client),
+      render: (client: string, t) => (
+        <Link to={chatLink(t)} target="_blank">
+          {client}
+        </Link>
+      ),
+    },
+    { title: "Группа", dataIndex: "groupNames" },
+    {
+      title: "Открыта",
+      dataIndex: "openedAt",
+      defaultSortOrder: "ascend",
+      sorter: (a, b) => a.openedAt.localeCompare(b.openedAt),
+      render: (v: string) => dayjs(v).format("DD.MM.YYYY HH:mm"),
+    },
+    {
+      title: "Последнее сообщение",
+      dataIndex: "lastActivity",
+      sorter: (a, b) => a.lastActivity.localeCompare(b.lastActivity),
+      render: (v: string) => dayjs(v).format("DD.MM.YYYY HH:mm"),
+    },
+    { title: "Категория", dataIndex: "category" },
+    {
+      title: "Сообщений",
+      key: "messages",
+      sorter: (a, b) => a.messagesIn + a.messagesOut - (b.messagesIn + b.messagesOut),
+      render: (_, t) => `${t.messagesIn} / ${t.messagesOut}`,
+    },
+    { title: "Первым ответил", dataIndex: "firstResponder" },
+    {
+      title: "Что дальше",
+      key: "outcome",
+      filters: [
+        { text: "Так и не закрыта", value: "open" },
+        { text: "Закрыта позже", value: "closed" },
+        { text: "Отклонена позже", value: "rejected" },
+        { text: "Истекла позже", value: "expired" },
+      ],
+      onFilter: (value, t) => t.finalStatus === value,
+      render: (_, t) => {
+        if (t.finalStatus === "open") return <Tag color="orange">так и не закрыта</Tag>;
+        const label =
+          t.finalStatus === "closed"
+            ? "закрыта"
+            : t.finalStatus === "rejected"
+              ? "отклонена"
+              : "истекла";
+        return (
+          <span>
+            {label}
+            {t.closedAt ? ` ${dayjs(t.closedAt).format("DD.MM.YYYY")}` : ""}
+          </span>
+        );
+      },
+    },
+  ];
   const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
 
   const categoryStats = useMemo(() => {
@@ -75,9 +163,8 @@ export default function MetricsPage() {
           messages: acc.messages + p.messages,
           closed: acc.closed + p.closed,
           rejected: acc.rejected + p.rejected,
-          inProgress: acc.inProgress + p.inProgress,
         }),
-        { messages: 0, closed: 0, rejected: 0, inProgress: 0 },
+        { messages: 0, closed: 0, rejected: 0 },
       ),
     [data],
   );
@@ -88,7 +175,7 @@ export default function MetricsPage() {
     const labels = data.map((p) => dayjs(p.bucket).format(labelFormat));
     return {
       tooltip: { trigger: "axis" },
-      legend: { data: ["Сообщения", "Закрытые", "Отклонённые", "В работе"], top: 0 },
+      legend: { data: ["Сообщения", "Закрытые", "Отклонённые", "Открытых на конец"], top: 0 },
       grid: { left: 56, right: 56, top: 40, bottom: 64 },
       dataZoom: [
         { type: "inside" },
@@ -133,12 +220,12 @@ export default function MetricsPage() {
           data: data.map((p) => p.rejected),
         },
         {
-          name: "В работе",
+          name: "Открытых на конец",
           type: "line",
           smooth: true,
           showSymbol: false,
-          itemStyle: { color: COLORS.inProgress },
-          data: data.map((p) => p.inProgress),
+          itemStyle: { color: COLORS.backlog },
+          data: data.map((p) => p.backlog),
         },
       ],
     };
@@ -334,6 +421,12 @@ export default function MetricsPage() {
             { Показатель: "Период", Значение: `${startStr} — ${endStr}` },
             { Показатель: "Группа", Значение: group ?? "все" },
             { Показатель: "Сообщений", Значение: totals.messages },
+            {
+              Показатель: backlogClamped
+                ? `Открытых заявок на ${dayjs(backlog!.asOf).format("DD.MM.YYYY")} (конец данных)`
+                : "Открытых заявок на конец периода",
+              Значение: backlog?.openTickets ?? 0,
+            },
             { Показатель: "Закрытых заявок", Значение: totals.closed },
             { Показатель: "Отклонённых", Значение: totals.rejected },
             { Показатель: "Повторных обращений (вероятных)", Значение: reopenTotals.probable },
@@ -351,7 +444,7 @@ export default function MetricsPage() {
             Сообщений: p.messages,
             Закрыто: p.closed,
             Отклонено: p.rejected,
-            "В работе": p.inProgress,
+            "Открытых на конец": p.backlog,
           })),
         },
         {
@@ -545,7 +638,34 @@ export default function MetricsPage() {
         <Col xs={12} md={6}><Card><Statistic title="Сообщений" value={totals.messages} valueStyle={{ color: COLORS.messages }} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="Закрытых заявок" value={totals.closed} valueStyle={{ color: COLORS.closed }} /></Card></Col>
         <Col xs={12} md={6}><Card><Statistic title="Отклонённых" value={totals.rejected} valueStyle={{ color: COLORS.rejected }} /></Card></Col>
-        <Col xs={12} md={6}><Card><Statistic title="В работе" value={totals.inProgress} valueStyle={{ color: COLORS.inProgress }} /></Card></Col>
+        <Col xs={12} md={6}>
+          <Card
+            hoverable
+            onClick={() => setOpenTicketsShown(true)}
+            style={{ cursor: "pointer" }}
+          >
+            <Tooltip
+              title={
+                "Заявки, открытые на конец периода: не закрыты и не заброшены " +
+                "(клиент молчит дольше 20 рабочих часов). Нажмите, чтобы увидеть список." +
+                (backlogClamped ? " Период выходит за пределы данных — показано на дату последнего сообщения." : "")
+              }
+            >
+              <Statistic
+                title="Открытых на конец периода"
+                value={backlog?.openTickets ?? 0}
+                suffix={
+                  backlogClamped ? (
+                    <span style={{ fontSize: 13, color: "#8c8c8c", marginLeft: 8 }}>
+                      на {dayjs(backlog!.asOf).format("DD.MM.YYYY")}
+                    </span>
+                  ) : undefined
+                }
+                valueStyle={{ color: COLORS.backlog }}
+              />
+            </Tooltip>
+          </Card>
+        </Col>
       </Row>
 
       <Card title={`Динамика — ${group ?? "все группы"}`}>
@@ -616,6 +736,56 @@ export default function MetricsPage() {
       >
         <EChart option={categoriesOption} loading={categoriesLoading} height={340} />
       </Card>
+
+      <Modal
+        title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")} — ${group ?? "все группы"}`}
+        open={openTicketsShown}
+        onCancel={() => setOpenTicketsShown(false)}
+        width={1100}
+        footer={
+          <Space>
+            <Button
+              icon={<FileExcelOutlined />}
+              disabled={openTickets.length === 0}
+              onClick={() =>
+                exportToExcel(
+                  openTickets.map((t) => ({
+                    Клиент: t.client,
+                    Группа: t.groupNames ?? "",
+                    Открыта: dayjs(t.openedAt).format("DD.MM.YYYY HH:mm"),
+                    "Последнее сообщение": dayjs(t.lastActivity).format("DD.MM.YYYY HH:mm"),
+                    Категория: t.category,
+                    "Сообщений клиента": t.messagesIn,
+                    "Сообщений поддержки": t.messagesOut,
+                    "Первым ответил": t.firstResponder ?? "",
+                    "Что дальше": t.finalStatus,
+                    "Закрыта позже": t.closedAt ? dayjs(t.closedAt).format("DD.MM.YYYY HH:mm") : "",
+                  })),
+                  `open_tickets_${group ?? "all"}_${dayjs(backlog?.asOf ?? endStr).format("YYYY-MM-DD")}.xlsx`,
+                  "Открытые заявки",
+                )
+              }
+            >
+              Excel
+            </Button>
+            <Button onClick={() => setOpenTicketsShown(false)}>Закрыть</Button>
+          </Space>
+        }
+      >
+        <p style={{ color: "#8c8c8c", marginTop: 0 }}>
+          Клик по имени клиента открывает его переписку в разделе чатов (в новой вкладке),
+          начиная с даты открытия заявки.
+        </p>
+        <Table
+          rowKey={(t) => `${t.client}_${t.openedAt}`}
+          columns={openTicketColumns}
+          dataSource={openTickets}
+          loading={openTicketsLoading}
+          size="small"
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          scroll={{ x: true }}
+        />
+      </Modal>
     </Space>
   );
 }

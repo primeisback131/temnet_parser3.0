@@ -1,5 +1,6 @@
 import type {
   AlertsReport,
+  BacklogReport,
   Bucket,
   CategoryCount,
   ChatMessage,
@@ -9,6 +10,7 @@ import type {
   HelpAccount,
   HelpAccountReport,
   MetricPoint,
+  OpenTicket,
   OperatorStat,
   ReopenPoint,
   ResolutionPoint,
@@ -54,6 +56,18 @@ export const api = {
       start,
       end,
       bucket,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getBacklog: (end: string, groupName?: string) =>
+    getJson<BacklogReport>("/metrics/backlog", {
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getBacklogTickets: (end: string, groupName?: string) =>
+    getJson<OpenTicket[]>("/metrics/backlog/tickets", {
+      end,
       ...(groupName ? { groupName } : {}),
     }),
 

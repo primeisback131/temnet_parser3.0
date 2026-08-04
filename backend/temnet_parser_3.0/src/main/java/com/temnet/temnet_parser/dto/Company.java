@@ -7,7 +7,7 @@ public record Company(
         Long totalUsers,
         Long closedRequests,
         Long rejectedRequests,
-        Long requestsInProgress,
+        Long openRequests,
         Long totalMessages
 ) {
 }

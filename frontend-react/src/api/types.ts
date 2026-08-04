@@ -8,7 +8,7 @@ export interface Company {
   totalUsers: number;
   closedRequests: number;
   rejectedRequests: number;
-  requestsInProgress: number;
+  openRequests: number;
   totalMessages: number;
 }
 
@@ -75,7 +75,7 @@ export interface UserStat {
   userName: string;
   closedRequests: number;
   rejectedRequests: number;
-  requestsInProgress: number;
+  openRequests: number;
   totalMessages: number;
 }
 
@@ -86,6 +86,26 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+/** Tickets still open at the end of the period, and the moment it describes. */
+export interface BacklogReport {
+  asOf: string; // ISO datetime — period end, or the freshest message if earlier
+  openTickets: number;
+}
+
+/** One ticket behind the backlog count. */
+export interface OpenTicket {
+  client: string;
+  groupNames: string | null;
+  openedAt: string;
+  lastActivity: string;
+  category: string;
+  messagesIn: number;
+  messagesOut: number;
+  firstResponder: string | null;
+  finalStatus: "open" | "closed" | "rejected" | "expired"; // what happened later
+  closedAt: string | null;
+}
+
 export type Bucket = "day" | "week" | "month";
 
 export interface MetricPoint {
@@ -93,7 +113,7 @@ export interface MetricPoint {
   messages: number;
   closed: number;
   rejected: number;
-  inProgress: number;
+  backlog: number; // tickets still open at the END of the bucket
 }
 
 export interface HeatmapCell {

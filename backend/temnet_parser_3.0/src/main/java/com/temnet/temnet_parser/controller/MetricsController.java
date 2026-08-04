@@ -1,10 +1,12 @@
 package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.AlertsReport;
+import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
@@ -38,6 +40,22 @@ public class MetricsController {
             @RequestParam(required = false) String groupName,
             @RequestParam(defaultValue = "day") String bucket) {
         return metricsService.timeseries(start, end, groupName, Bucket.from(bucket));
+    }
+
+    /** Tickets still open at the end of the period (the real backlog). */
+    @GetMapping("/backlog")
+    public BacklogReport backlog(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.backlog(end, groupName);
+    }
+
+    /** The individual tickets behind the backlog count. */
+    @GetMapping("/backlog/tickets")
+    public List<OpenTicket> backlogTickets(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.backlogTickets(end, groupName);
     }
 
     @GetMapping("/heatmap")
