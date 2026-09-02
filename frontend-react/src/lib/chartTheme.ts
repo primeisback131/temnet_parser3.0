@@ -1,4 +1,4 @@
-import * as echarts from "echarts";
+import * as echarts from "echarts/core";
 import { accent, tokens, type ThemeMode } from "./palette";
 
 export const CHART_THEME: Record<ThemeMode, string> = {

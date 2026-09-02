@@ -5,7 +5,22 @@ import {
   MessageOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Empty, Modal, Row, Segmented, Select, Space, Table, Tag, Tooltip } from "antd";
+import {
+  App,
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  Empty,
+  Modal,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption, LineSeriesOption } from "echarts";
 import dayjs from "dayjs";
@@ -27,6 +42,7 @@ import {
 } from "../api/queries";
 import type { Bucket, OpenTicket } from "../api/types";
 import EChart from "../components/EChart";
+import QueryError from "../components/QueryError";
 import StatCard from "../components/StatCard";
 import { areaFade, barFade, barFadeX, chartColors, dot, legendTop } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
@@ -88,11 +104,13 @@ function spreadBand(low: number[], high: number[], color: string): LineSeriesOpt
 }
 
 export default function MetricsPage() {
+  const { message } = App.useApp();
+  const { mode } = useThemeMode();
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
-  const { mode } = useThemeMode();
+  const [exporting, setExporting] = useState(false);
   const c = chartColors(mode);
   // Below this the legend of a two-axis chart spans the full width and would
   // run into the axis names sitting in the top corners, so those are dropped
@@ -104,14 +122,18 @@ export default function MetricsPage() {
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
 
-  const { data: groups = [] } = useGroups();
-  const { data = [], isFetching } = useTimeseries(startStr, endStr, bucket, group);
-  const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
-  const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
-  const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
-  const { data: reopens = [], isFetching: reopensLoading } = useReopens(startStr, endStr, bucket, group);
-  const { data: alertsReport } = useAlerts();
-  const { data: backlog } = useBacklog(endStr, group);
+  const { data: groups = [], error: groupsError } = useGroups();
+  const { data = [], isFetching, error: timeseriesError } = useTimeseries(startStr, endStr, bucket, group);
+  const { data: heatmap = [], isFetching: heatmapLoading, error: heatmapError } = useHeatmap(startStr, endStr, group);
+  const { data: sla = [], isFetching: slaLoading, error: slaError } = useSla(startStr, endStr, bucket, group);
+  const {
+    data: resolution = [],
+    isFetching: resolutionLoading,
+    error: resolutionError,
+  } = useResolution(startStr, endStr, bucket, group);
+  const { data: reopens = [], isFetching: reopensLoading, error: reopensError } = useReopens(startStr, endStr, bucket, group);
+  const { data: alertsReport, error: alertsError } = useAlerts();
+  const { data: backlog, error: backlogError } = useBacklog(endStr, group);
   // The period reaches past the data: the count describes the last day with
   // messages, not the requested end.
   const backlogClamped = backlog != null && dayjs(backlog.asOf).isBefore(dayjs(endStr), "day");
@@ -195,7 +217,23 @@ export default function MetricsPage() {
       },
     },
   ];
-  const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
+  const {
+    data: categories = [],
+    isFetching: categoriesLoading,
+    error: categoriesError,
+  } = useCategories(startStr, endStr, group);
+
+  // Every widget falls back to empty data on failure; one banner says why.
+  const firstError =
+    groupsError ??
+    timeseriesError ??
+    backlogError ??
+    slaError ??
+    resolutionError ??
+    reopensError ??
+    heatmapError ??
+    categoriesError ??
+    alertsError;
 
   const categoryStats = useMemo(() => {
     const named = categories.filter((c) => c.category !== "Другое");
@@ -411,6 +449,17 @@ export default function MetricsPage() {
   }, [reopens, labelFormat, c, unit, gridTop]);
 
   const exportReport = async () => {
+    setExporting(true);
+    try {
+      await buildReport();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "Не удалось сформировать отчёт");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const buildReport = async () => {
     const [companies, operators] = await Promise.all([
       api.getCompanies(startStr, endStr),
       api.getOperators(startStr, endStr, group ?? undefined),
@@ -604,13 +653,15 @@ export default function MetricsPage() {
               ]}
             />
             <Tooltip title="Excel со всеми метриками за период">
-              <Button icon={<FileExcelOutlined />} onClick={exportReport}>
+              <Button icon={<FileExcelOutlined />} onClick={() => void exportReport()} loading={exporting}>
                 Отчёт
               </Button>
             </Tooltip>
           </Space>
         </Space>
       </Card>
+
+      <QueryError error={firstError} style={{ marginBottom: 0 }} />
 
       {alertsReport && alertsReport.alerts.length > 0 && (
         <Card
@@ -846,7 +897,7 @@ export default function MetricsPage() {
         }
       >
         <p className="meta" style={{ marginTop: 0 }}>
-          Имя клиента открывает его переписку в новой вкладке.
+          Имя клиента открывает его переписку в новой вкладке, начиная с даты открытия заявки.
         </p>
         <Table
           rowKey={(t) => `${t.client}_${t.openedAt}`}

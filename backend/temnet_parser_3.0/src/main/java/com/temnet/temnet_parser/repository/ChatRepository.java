@@ -14,7 +14,8 @@ import java.util.List;
 @Repository
 public class ChatRepository {
 
-    private static final String SQL = SqlLoader.load("sql/chat.sql");
+    private static final String HISTORY_SQL = SqlLoader.load("sql/chat.sql");
+    private static final String PARTICIPANTS_SQL = SqlLoader.load("sql/chat_participants.sql");
 
     private final JdbcClient jdbcClient;
 
@@ -22,16 +23,37 @@ public class ChatRepository {
         this.jdbcClient = jdbcClient;
     }
 
-    /** Chat history within the caller's scope; the end date is inclusive. */
-    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, Scope scope) {
+    /**
+     * Chat history within the caller's scope; the end date is inclusive.
+     * With a {@code client} only that client's conversation is returned.
+     */
+    public List<ChatMessage> findHistory(LocalDate start, LocalDate end, Scope scope, String client) {
         if (scope.isEmpty()) {
             return List.of();
         }
-        String sql = SQL.replace("${scopeMessages}", ScopeSql.messages("m", scope));
+        boolean single = client != null && !client.isBlank();
+        String sql = HISTORY_SQL
+                .replace("${clientFilter}", single ? "AND m.client = :client" : "")
+                .replace("${scopeMessages}", ScopeSql.messages("m", scope));
+        var spec = ScopeSql.bind(jdbcClient.sql(sql)
+                .param("start", start)
+                .param("endExclusive", end.plusDays(1)), scope);
+        if (single) {
+            spec = spec.param("client", client);
+        }
+        return spec.query(new DataClassRowMapper<>(ChatMessage.class)).list();
+    }
+
+    /** Clients with at least one message in the period, within the caller's scope. */
+    public List<String> findParticipants(LocalDate start, LocalDate end, Scope scope) {
+        if (scope.isEmpty()) {
+            return List.of();
+        }
+        String sql = PARTICIPANTS_SQL.replace("${scopeMessages}", ScopeSql.messages("m", scope));
         return ScopeSql.bind(jdbcClient.sql(sql)
                         .param("start", start)
                         .param("endExclusive", end.plusDays(1)), scope)
-                .query(new DataClassRowMapper<>(ChatMessage.class))
+                .query(String.class)
                 .list();
     }
 }

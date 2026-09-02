@@ -1,11 +1,12 @@
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, Input } from "antd";
 import { useState } from "react";
+import { ApiError, TooManyRequestsError, UnauthorizedError } from "../api/client";
 import { useAuth } from "../auth";
 import BrandMark from "../components/BrandMark";
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, sessionExpired } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -14,9 +15,17 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(values.username.trim(), values.password);
-    } catch {
-      // The backend never says which half was wrong; neither do we.
-      setError("Неверный логин или пароль");
+    } catch (e) {
+      if (e instanceof UnauthorizedError) {
+        // The backend never says which half was wrong; neither do we.
+        setError("Неверный логин или пароль");
+      } else if (e instanceof TooManyRequestsError) {
+        setError(e.message);
+      } else if (e instanceof ApiError) {
+        setError(`Сервер ответил ошибкой: ${e.message}`);
+      } else {
+        setError("Сервер недоступен, попробуйте позже");
+      }
     } finally {
       setBusy(false);
     }
@@ -35,6 +44,14 @@ export default function LoginPage() {
           </div>
         </div>
         <Card styles={{ body: { padding: 24 } }}>
+          {sessionExpired && !error && (
+            <Alert
+              type="warning"
+              message="Сессия завершена, войдите заново"
+              showIcon
+              style={{ marginBottom: 16 }}
+            />
+          )}
           {error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}
           <Form layout="vertical" onFinish={submit} requiredMark={false} size="large">
             <Form.Item name="username" label="Логин" rules={[{ required: true, message: "Введите логин" }]}>

@@ -2,6 +2,7 @@ import {
   BankOutlined,
   CustomerServiceOutlined,
   DatabaseOutlined,
+  KeyOutlined,
   LineChartOutlined,
   LogoutOutlined,
   MessageOutlined,
@@ -10,13 +11,14 @@ import {
   SunOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { Button, Layout, Menu, Tag, Tooltip } from "antd";
+import { App, Button, Layout, Menu, Modal, Tag, Tooltip } from "antd";
 import type { MenuProps } from "antd";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
 import BrandMark from "./BrandMark";
+import ChangePasswordForm from "./ChangePasswordForm";
 
 const { Header, Sider, Content } = Layout;
 
@@ -27,6 +29,8 @@ export default function AppLayout() {
   const location = useLocation();
   const { mode, toggle } = useThemeMode();
   const { user, logout, canUseChats, canViewMetrics } = useAuth();
+  const { message } = App.useApp();
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   // The menu only offers what the backend would actually serve.
   const sections: { label: string; items: { key: string; icon: ReactNode; label: string }[] }[] = [
@@ -112,6 +116,14 @@ export default function AppLayout() {
               <span className="app-user-name">{user?.fullName || user?.username}</span>
               {roleTag}
             </span>
+            <Tooltip title="Сменить пароль">
+              <Button
+                type="text"
+                aria-label="Сменить пароль"
+                icon={<KeyOutlined />}
+                onClick={() => setPasswordOpen(true)}
+              />
+            </Tooltip>
             <Tooltip title={mode === "dark" ? "Светлая тема" : "Тёмная тема"}>
               <Button
                 type="text"
@@ -129,6 +141,21 @@ export default function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+
+      <Modal
+        title="Смена пароля"
+        open={passwordOpen}
+        onCancel={() => setPasswordOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <ChangePasswordForm
+          onDone={() => {
+            setPasswordOpen(false);
+            message.success("Пароль изменён");
+          }}
+        />
+      </Modal>
     </Layout>
   );
 }

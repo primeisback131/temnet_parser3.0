@@ -25,28 +25,63 @@ import type {
   UserStat,
 } from "./types";
 
-const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
+/**
+ * Base of the API. Relative by default (`/api`): the dev server proxies it and
+ * a reverse proxy does the same in production, so the SPA and the API share
+ * one origin and the session cookie needs no cross-site setup. An absolute
+ * URL still works for a split deployment (the backend then needs CORS_ORIGIN).
+ */
+const BASE = import.meta.env.VITE_API_BASE || "/api";
 
-/** Thrown on 401 so the app can show the login screen instead of an error. */
-export class UnauthorizedError extends Error {
-  constructor() {
-    super("Требуется вход");
+/** Any non-2xx answer; `message` is what the backend said, when it said anything. */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
   }
 }
 
-/** Thrown on 403 - the account exists but lacks rights for this data. */
-export class ForbiddenError extends Error {
-  constructor() {
-    super("Нет доступа к этим данным");
+/** 401: no valid session (or wrong credentials on the login call). */
+export class UnauthorizedError extends ApiError {
+  constructor(message = "Требуется вход") {
+    super(401, message);
+    this.name = "UnauthorizedError";
   }
 }
 
-/** Thrown on 409 - the server refuses because the same work is already running. */
-export class ConflictError extends Error {
-  constructor() {
-    super("Синхронизация уже выполняется");
+/** 403: the account exists but lacks rights for this data. */
+export class ForbiddenError extends ApiError {
+  constructor(message = "Нет доступа к этим данным") {
+    super(403, message);
+    this.name = "ForbiddenError";
   }
 }
+
+/** 409: the server refuses because the same work is already running. */
+export class ConflictError extends ApiError {
+  constructor(message = "Операция уже выполняется") {
+    super(409, message);
+    this.name = "ConflictError";
+  }
+}
+
+/** 429: the login rate limiter kicked in. */
+export class TooManyRequestsError extends ApiError {
+  constructor(message = "Слишком много попыток, попробуйте позже") {
+    super(429, message);
+    this.name = "TooManyRequestsError";
+  }
+}
+
+/**
+ * Fired on `window` when the backend answers 401 to a call made on behalf of
+ * a signed-in user: the session has expired or the account was disabled.
+ * The auth provider listens and shows the login screen.
+ */
+export const SESSION_EXPIRED_EVENT = "temnet:session-expired";
 
 /** The CSRF token Spring publishes in a readable cookie. */
 function csrfToken(): string {
@@ -54,8 +89,22 @@ function csrfToken(): string {
   return match ? decodeURIComponent(match[1]) : "";
 }
 
+/** The `message` of an error body, when the backend sent one. */
+async function errorMessage(res: Response): Promise<string | null> {
+  try {
+    const text = await res.text();
+    if (!text) return null;
+    const body: unknown = JSON.parse(text);
+    return typeof body === "object" && body !== null && typeof (body as { message?: unknown }).message === "string"
+      ? (body as { message: string }).message
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init: RequestInit, params?: Record<string, string>): Promise<T> {
-  const url = new URL(BASE + path);
+  const url = new URL(BASE + path, window.location.origin);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
@@ -72,33 +121,28 @@ async function request<T>(path: string, init: RequestInit, params?: Record<strin
       ...init.headers,
     },
   });
-  if (res.status === 401) {
-    throw new UnauthorizedError();
-  }
-  if (res.status === 403) {
-    throw new ForbiddenError();
-  }
-  if (res.status === 409) {
-    throw new ConflictError();
-  }
   if (!res.ok) {
-    throw new Error((await problemDetail(res)) ?? `Запрос ${path} вернул ${res.status} ${res.statusText}`);
+    const message = await errorMessage(res);
+    switch (res.status) {
+      case 401:
+        // Wrong credentials on the login call and "not signed in yet" on the
+        // startup check are expected; anything else means the session died.
+        if (path !== "/auth/login" && path !== "/auth/me") {
+          window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+        }
+        throw new UnauthorizedError(message ?? undefined);
+      case 403:
+        throw new ForbiddenError(message ?? undefined);
+      case 409:
+        throw new ConflictError(message ?? undefined);
+      case 429:
+        throw new TooManyRequestsError(message ?? undefined);
+      default:
+        throw new ApiError(res.status, message ?? `Запрос ${path} вернул ${res.status}`);
+    }
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as T;
-}
-
-/** A rejected request carries its human-readable reason in the problem body. */
-async function problemDetail(res: Response): Promise<string | undefined> {
-  try {
-    const body: unknown = await res.json();
-    if (typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string") {
-      return body.detail;
-    }
-  } catch {
-    // Not a JSON body - fall back to the status line.
-  }
-  return undefined;
 }
 
 async function getJson<T>(path: string, params?: Record<string, string>): Promise<T> {
@@ -115,12 +159,16 @@ export const api = {
     send<CurrentUser>("/auth/login", "POST", { username, password }),
   logout: () => send<void>("/auth/logout", "POST"),
   me: () => getJson<CurrentUser>("/auth/me"),
+  /** The caller's own password; the current one proves ownership. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    send<void>("/auth/password", "POST", { currentPassword, newPassword }),
 
   // ---- account administration ----
   listUsers: () => getJson<UserAccount[]>("/admin/users"),
   listGrantableHelpAccounts: () => getJson<HelpAccountScope[]>("/admin/users/help-accounts"),
   createUser: (body: UserCreateRequest) => send<number>("/admin/users", "POST", body),
   updateUser: (id: number, body: UserUpdateRequest) => send<void>(`/admin/users/${id}`, "PUT", body),
+  /** Issues a temporary password the user has to replace at next login. */
   setUserPassword: (id: number, password: string) =>
     send<void>(`/admin/users/${id}/password`, "PUT", { password }),
   deleteUser: (id: number) => send<void>(`/admin/users/${id}`, "DELETE"),
@@ -145,8 +193,13 @@ export const api = {
   getUsers: (start: string, end: string, groupName: string) =>
     getJson<UserStat[]>("/users", { start, end, groupName }),
 
-  getChats: (start: string, end: string, groupName: string) =>
-    getJson<ChatMessage[]>("/chat", { start, end, groupName }),
+  /** Correspondence of one group; `user` narrows it to a single client's conversation. */
+  getChats: (start: string, end: string, groupName: string, user?: string) =>
+    getJson<ChatMessage[]>("/chat", { start, end, groupName, ...(user ? { user } : {}) }),
+
+  /** Clients of the group that talked to support in the period (chat access). */
+  getChatParticipants: (start: string, end: string, groupName: string) =>
+    getJson<string[]>("/chat/chatlist", { start, end, groupName }),
 
   getTimeseries: (start: string, end: string, bucket: Bucket, groupName?: string) =>
     getJson<MetricPoint[]>("/metrics/timeseries", {

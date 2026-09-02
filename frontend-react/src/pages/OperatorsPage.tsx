@@ -3,6 +3,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useMemo, useState } from "react";
 import { useGroups, useOperators } from "../api/queries";
 import type { OperatorStat } from "../api/types";
+import QueryError from "../components/QueryError";
 import { defaultRange, toApiDate } from "../lib/date";
 import { humanizeSeconds } from "../lib/format";
 
@@ -15,8 +16,8 @@ export default function OperatorsPage() {
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
 
-  const { data: groups = [] } = useGroups();
-  const { data = [], isFetching } = useOperators(startStr, endStr, group);
+  const { data: groups = [], error: groupsError } = useGroups();
+  const { data = [], isFetching, error } = useOperators(startStr, endStr, group);
 
   const maxClosed = useMemo(() => data.reduce((m, o) => Math.max(m, o.closed), 0), [data]);
 
@@ -84,6 +85,7 @@ export default function OperatorsPage() {
         </Space>
         <span className="meta">{data.length} операторов</span>
       </div>
+      <QueryError error={groupsError ?? error} />
       <Table
         rowKey="operator"
         columns={columns}
@@ -91,6 +93,7 @@ export default function OperatorsPage() {
         loading={isFetching}
         size="middle"
         pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        scroll={{ x: true }}
       />
     </Card>
   );

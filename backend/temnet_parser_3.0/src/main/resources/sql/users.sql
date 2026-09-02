@@ -1,14 +1,16 @@
 -- Per-client stats within one group: ticket outcomes in the period, tickets
 -- still open at its end, plus the number of messages in their support
--- conversation. Only clients with at least one message in the period.
+-- conversation. A client is listed when anything of theirs falls into the
+-- period — a message, a closure, or a ticket still open at its end — which
+-- is exactly what the company table sums over, so these rows add up to it.
 SELECT
     cg.client                   AS user_name,
     COALESCE(tk.closed, 0)      AS closed_requests,
     COALESCE(tk.rejected, 0)    AS rejected_requests,
     COALESCE(tk.open_at_end, 0) AS open_requests,
-    msg.total                   AS total_messages
+    COALESCE(msg.total, 0)      AS total_messages
 FROM client_group cg
-JOIN (
+LEFT JOIN (
     SELECT m.client AS client, COUNT(*) AS total
     FROM message m
     WHERE m.created_at >= :start AND m.created_at < :endExclusive
@@ -32,4 +34,5 @@ LEFT JOIN (
     GROUP BY t.client
 ) AS tk ON tk.client = cg.client
 WHERE cg.grp = :groupName
+  AND (msg.total > 0 OR tk.closed > 0 OR tk.rejected > 0 OR tk.open_at_end > 0)
 ORDER BY user_name

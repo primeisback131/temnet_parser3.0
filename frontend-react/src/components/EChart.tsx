@@ -1,11 +1,36 @@
 import type { EChartsOption } from "echarts";
-import * as echarts from "echarts";
+import { BarChart, HeatmapChart, LineChart } from "echarts/charts";
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  VisualMapComponent,
+} from "echarts/components";
+import * as echarts from "echarts/core";
+import { CanvasRenderer } from "echarts/renderers";
 import { useEffect, useRef } from "react";
 import { chartColors, CHART_THEME, registerChartThemes } from "../lib/chartTheme";
 import { tokens } from "../lib/palette";
 import { useThemeMode } from "../theme";
 
+// Only what the dashboards use, instead of the whole library: keeps the
+// lazily loaded metrics chunk small. A new chart type or component has to be
+// registered here before it renders.
+echarts.use([
+  LineChart,
+  BarChart,
+  HeatmapChart,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  DataZoomComponent,
+  VisualMapComponent,
+  CanvasRenderer,
+]);
 registerChartThemes();
+
+type Chart = ReturnType<typeof echarts.init>;
 
 interface Props {
   option: EChartsOption;
@@ -23,7 +48,7 @@ const prefersReducedMotion = () =>
  */
 export default function EChart({ option, height = 380, loading = false }: Props) {
   const elementRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+  const chartRef = useRef<Chart | null>(null);
   const { mode } = useThemeMode();
 
   // Latest props for the re-init effect, so it can restore state without
@@ -34,7 +59,7 @@ export default function EChart({ option, height = 380, loading = false }: Props)
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
 
-  const showLoading = (chart: echarts.ECharts) =>
+  const showLoading = (chart: Chart) =>
     chart.showLoading("default", {
       text: "",
       color: chartColors(mode).blue,

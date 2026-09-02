@@ -3,6 +3,7 @@ package com.temnet.temnet_parser.analytics;
 import com.temnet.temnet_parser.support.BusinessTime;
 import com.temnet.temnet_parser.support.CategoryRules;
 import com.temnet.temnet_parser.support.ClosurePhrase;
+import com.temnet.temnet_parser.support.ReopenSignals;
 import com.temnet.temnet_parser.support.SqlLoader;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -27,6 +28,7 @@ import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -78,14 +80,8 @@ public class AnalyticsSyncService {
     private static final long REOPEN_WINDOW_SECONDS = 10 * 3600; // one working day
     private static final long STALE_OPEN_SECONDS = 20 * 3600;    // silence that expires an open ticket
 
-    private static final Pattern ACK = Pattern.compile(
-            "\\b(спасибо|благодарю|благодарим|ок|окей|хорошо|понял|поняла|понятно|принято|отлично|супер|ага|угу)\\b",
-            Pattern.UNICODE_CHARACTER_CLASS);
     /** A binary string in an Erlang term: {@code <<"name">>}. */
     private static final Pattern ERLANG_BINARY = Pattern.compile("<<\"([^\"]*)\">>");
-
-    private static final Pattern REOPEN_MARKERS = Pattern.compile(
-            "опять|снова|не помог|та же|тот же|всё ещё|все еще|повторн|прежнему|так и не");
 
     private final JdbcClient source;
     private final JdbcTemplate analytics;
@@ -94,6 +90,15 @@ public class AnalyticsSyncService {
     private final CacheManager cacheManager;
     private final LlmReopenClassifier llmClassifier;
     private final String operatorPrefix;
+    /**
+     * Zone the dump's timestamps are written in and the zone the working
+     * hours (BusinessTime) are defined in. ejabberd usually archives in UTC
+     * while the desk works in local time; when both are configured every
+     * timestamp is shifted at ingest, so 08:00-18:00 means the desk's day.
+     * Both null = timestamps are taken as they are.
+     */
+    private final ZoneId sourceZone;
+    private final ZoneId businessZone;
 
     public AnalyticsSyncService(
             JdbcClient source,
@@ -101,7 +106,9 @@ public class AnalyticsSyncService {
             JdbcTransactionManager analyticsTxManager,
             CacheManager cacheManager,
             LlmReopenClassifier llmClassifier,
-            @Value("${app.operator-prefix:help}") String operatorPrefix) {
+            @Value("${app.operator-prefix:help}") String operatorPrefix,
+            @Value("${app.time.source-zone:}") String sourceZone,
+            @Value("${app.time.business-zone:}") String businessZone) {
         this.source = source;
         this.analytics = analytics;
         this.analyticsNamed = new NamedParameterJdbcTemplate(analytics);
@@ -109,6 +116,27 @@ public class AnalyticsSyncService {
         this.cacheManager = cacheManager;
         this.llmClassifier = llmClassifier;
         this.operatorPrefix = operatorPrefix;
+        this.sourceZone = zone(sourceZone);
+        this.businessZone = zone(businessZone);
+        if ((this.sourceZone == null) != (this.businessZone == null)) {
+            throw new IllegalArgumentException(
+                    "app.time.source-zone and app.time.business-zone must be set together (or both left empty)");
+        }
+        if (this.sourceZone != null) {
+            log.info("Dump timestamps are converted from {} to {} at ingest", this.sourceZone, this.businessZone);
+        }
+    }
+
+    private static ZoneId zone(String id) {
+        return id == null || id.isBlank() ? null : ZoneId.of(id.strip());
+    }
+
+    /** A dump timestamp shifted into the zone the working hours are defined in. */
+    private LocalDateTime toBusinessTime(LocalDateTime sourceTime) {
+        if (sourceZone == null || businessZone == null || sourceZone.equals(businessZone)) {
+            return sourceTime;
+        }
+        return sourceTime.atZone(sourceZone).withZoneSameInstant(businessZone).toLocalDateTime();
     }
 
     public record SyncSummary(boolean fullRebuild, long scannedRows, long newMessages, long llmClassified,
@@ -152,6 +180,15 @@ public class AnalyticsSyncService {
     /** A raw archive row: authorship and support-ness not yet resolved. */
     private record Raw(long id, String owner, String peer, String barePeer, String txt,
                        LocalDateTime createdAt, long tsMicros, String stanzaId) {
+    }
+
+    /**
+     * The pair of tables a run writes to: the live ones for an incremental
+     * sync, or the shadow copies a full rebuild fills before swapping them in.
+     */
+    private record Tables(String message, String ticket) {
+        static final Tables LIVE = new Tables("message", "ticket");
+        static final Tables REBUILD = new Tables("message_rebuild", "ticket_rebuild");
     }
 
     @PostConstruct
@@ -234,15 +271,18 @@ public class AnalyticsSyncService {
                 .get(0);
 
         boolean full = rebuild || maxId == null || maxId < watermark;
+        Tables tables = full ? Tables.REBUILD : Tables.LIVE;
         if (full) {
             log.info("Full rebuild (requested={}, source max id={}, watermark={})", rebuild, maxId, watermark);
-            analytics.execute("TRUNCATE TABLE ticket");
-            analytics.execute("TRUNCATE TABLE message");
-            analytics.update("UPDATE sync_state SET last_archive_id = 0 WHERE id = 1");
+            // A rebuild fills shadow tables and swaps them in at the very end:
+            // the live tables keep serving the old data for the minutes it
+            // takes, and a crash half-way leaves them untouched (the shadows
+            // are simply dropped at the next attempt).
+            prepareRebuildTables();
             watermark = 0;
         }
 
-        TicketEngine engine = new TicketEngine();
+        TicketEngine engine = new TicketEngine(tables);
         long scanned = 0;
         long inserted = 0;
 
@@ -261,11 +301,19 @@ public class AnalyticsSyncService {
             List<Msg> messages = normalizePairs(batch);
 
             inserted += tx.execute(status -> {
-                long fresh = insertAndProcess(messages, engine);
-                analytics.update("UPDATE sync_state SET last_archive_id = ? WHERE id = 1", newWatermark);
+                long fresh = insertAndProcess(messages, engine, tables);
+                if (!full) {
+                    // The watermark describes the LIVE tables; during a rebuild
+                    // it moves only once the shadows have replaced them.
+                    analytics.update("UPDATE sync_state SET last_archive_id = ? WHERE id = 1", newWatermark);
+                }
                 return fresh;
             });
             watermark = newWatermark;
+        }
+
+        if (full) {
+            swapRebuiltTables(watermark);
         }
 
         syncGroups();
@@ -301,8 +349,8 @@ public class AnalyticsSyncService {
                         """.formatted(BATCH_SIZE))
                 .param("watermark", watermark)
                 .query((rs, i) -> new Raw(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
-                        rs.getString(5).strip(), rs.getTimestamp(6).toLocalDateTime(), rs.getLong(7),
-                        stanzaId(rs.getBytes(8))))
+                        rs.getString(5).strip(), toBusinessTime(rs.getTimestamp(6).toLocalDateTime()),
+                        rs.getLong(7), stanzaId(rs.getBytes(8))))
                 .list();
     }
 
@@ -396,20 +444,48 @@ public class AnalyticsSyncService {
         return null;
     }
 
+    /** Empty shadow copies of the live tables, structure and indexes included. */
+    private void prepareRebuildTables() {
+        analytics.execute("DROP TABLE IF EXISTS " + Tables.REBUILD.message());
+        analytics.execute("DROP TABLE IF EXISTS " + Tables.REBUILD.ticket());
+        analytics.execute("CREATE TABLE " + Tables.REBUILD.message() + " LIKE " + Tables.LIVE.message());
+        analytics.execute("CREATE TABLE " + Tables.REBUILD.ticket() + " LIKE " + Tables.LIVE.ticket());
+    }
+
+    /**
+     * Puts the rebuilt tables in place of the live ones in a single atomic
+     * RENAME, then records the watermark they were built to. If the process
+     * dies between the two, the next incremental run re-reads the rows after
+     * the old watermark and finds every one of them already present.
+     */
+    private void swapRebuiltTables(long watermark) {
+        analytics.execute("DROP TABLE IF EXISTS message_old");
+        analytics.execute("DROP TABLE IF EXISTS ticket_old");
+        analytics.execute("RENAME TABLE "
+                + Tables.LIVE.message() + " TO message_old, "
+                + Tables.REBUILD.message() + " TO " + Tables.LIVE.message() + ", "
+                + Tables.LIVE.ticket() + " TO ticket_old, "
+                + Tables.REBUILD.ticket() + " TO " + Tables.LIVE.ticket());
+        analytics.update("UPDATE sync_state SET last_archive_id = ? WHERE id = 1", watermark);
+        analytics.execute("DROP TABLE message_old");
+        analytics.execute("DROP TABLE ticket_old");
+        log.info("Rebuilt tables swapped in at watermark {}", watermark);
+    }
+
     /**
      * Inserts the batch (dupes silently skipped via the unique dedup key) and
      * feeds ONLY the actually-new messages to the ticket state machine, in
      * chronological order. Runs inside one transaction with the watermark
      * update, so a crash never double-processes a message.
      */
-    private long insertAndProcess(List<Msg> batch, TicketEngine engine) {
+    private long insertAndProcess(List<Msg> batch, TicketEngine engine, Tables tables) {
         if (batch.isEmpty()) {
             return 0;
         }
         analytics.batchUpdate("""
-                        INSERT IGNORE INTO message (source_id, client, author, recipient, direction, txt, created_at, dedup_hash)
+                        INSERT IGNORE INTO %s (source_id, client, author, recipient, direction, txt, created_at, dedup_hash)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
+                        """.formatted(tables.message()),
                 batch,
                 batch.size(),
                 (ps, m) -> {
@@ -427,7 +503,8 @@ public class AnalyticsSyncService {
         // unreliable with bulk statements, so ask the table).
         List<Long> ids = batch.stream().map(Msg::sourceId).toList();
         Set<Long> freshIds = new HashSet<>(analyticsNamed.queryForList(
-                "SELECT source_id FROM message WHERE source_id IN (:ids)", Map.of("ids", ids), Long.class));
+                "SELECT source_id FROM " + tables.message() + " WHERE source_id IN (:ids)",
+                Map.of("ids", ids), Long.class));
 
         List<Msg> fresh = batch.stream()
                 .filter(m -> freshIds.contains(m.sourceId()))
@@ -550,8 +627,13 @@ public class AnalyticsSyncService {
      */
     private class TicketEngine {
 
+        private final Tables tables;
         private final Map<String, ClientState> states = new HashMap<>();
         private final Set<Ticket> dirty = new LinkedHashSet<>();
+
+        TicketEngine(Tables tables) {
+            this.tables = tables;
+        }
 
         private class ClientState {
             Ticket open;
@@ -585,11 +667,12 @@ public class AnalyticsSyncService {
                 return;
             }
 
-            String lower = m.txt().toLowerCase();
+            // "спасибо" after a closure is not a new ticket — but "не помогло"
+            // is, however short: ReopenSignals checks the markers first.
             if (st.lastClosed != null
-                    && isAck(lower, m.txt())
+                    && ReopenSignals.isAck(m.txt())
                     && BusinessTime.secondsBetween(st.lastClosed.closedAt, m.createdAt()) <= ACK_WINDOW_SECONDS) {
-                return; // "спасибо" after a closure is not a new ticket
+                return;
             }
 
             Ticket ticket = new Ticket(m.client(), m.createdAt());
@@ -600,7 +683,7 @@ public class AnalyticsSyncService {
             if (st.lastClosed != null
                     && BusinessTime.secondsBetween(st.lastClosed.closedAt, m.createdAt()) <= REOPEN_WINDOW_SECONDS) {
                 int score = 0;
-                if (REOPEN_MARKERS.matcher(lower).find()) {
+                if (ReopenSignals.isReopenMarker(m.txt())) {
                     score += 2;
                 }
                 if (ticket.categoryRank == st.lastClosed.categoryRank
@@ -652,10 +735,6 @@ public class AnalyticsSyncService {
             st.open = null;
         }
 
-        private boolean isAck(String lower, String txt) {
-            return txt.length() <= 10 || ACK.matcher(lower).find();
-        }
-
         private ClientState load(String client) {
             ClientState st = new ClientState();
             st.open = latest(client, "status = 'open'", null);
@@ -668,7 +747,7 @@ public class AnalyticsSyncService {
                     "SELECT id, client, account, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
                             + " in_progress_at, closed_at, closed_by, resolution_seconds, status, category_rank,"
                             + " messages_in, messages_out, reopened_from, reopen_score, reopen_llm"
-                            + " FROM ticket WHERE client = ? AND " + statusFilter
+                            + " FROM " + tables.ticket() + " WHERE client = ? AND " + statusFilter
                             + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
                     (rs, i) -> {
                         Ticket t = new Ticket(rs.getString("client"), rs.getTimestamp("opened_at").toLocalDateTime());
@@ -702,13 +781,13 @@ public class AnalyticsSyncService {
             GeneratedKeyHolder keys = new GeneratedKeyHolder();
             analytics.update(con -> {
                 PreparedStatement ps = con.prepareStatement("""
-                                INSERT INTO ticket (client, account, opened_at, last_activity, stale_at,
-                                                    first_response_at, first_responder, frt_seconds, in_progress_at,
-                                                    closed_at, closed_by, resolution_seconds, status, category,
-                                                    category_rank, messages_in, messages_out, reopened_from,
-                                                    reopen_score, reopen_llm)
+                                INSERT INTO %s (client, account, opened_at, last_activity, stale_at,
+                                                first_response_at, first_responder, frt_seconds, in_progress_at,
+                                                closed_at, closed_by, resolution_seconds, status, category,
+                                                category_rank, messages_in, messages_out, reopened_from,
+                                                reopen_score, reopen_llm)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """,
+                                """.formatted(tables.ticket()),
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
                 return ps;
@@ -719,13 +798,13 @@ public class AnalyticsSyncService {
         void flushDirty() {
             for (Ticket t : dirty) {
                 analytics.update("""
-                                UPDATE ticket SET last_activity = ?, stale_at = ?, first_response_at = ?,
-                                                  first_responder = ?, frt_seconds = ?, in_progress_at = ?,
-                                                  closed_at = ?, closed_by = ?, resolution_seconds = ?, status = ?,
-                                                  category = ?, category_rank = ?, messages_in = ?, messages_out = ?,
-                                                  reopened_from = ?, reopen_score = ?, reopen_llm = ?
+                                UPDATE %s SET last_activity = ?, stale_at = ?, first_response_at = ?,
+                                              first_responder = ?, frt_seconds = ?, in_progress_at = ?,
+                                              closed_at = ?, closed_by = ?, resolution_seconds = ?, status = ?,
+                                              category = ?, category_rank = ?, messages_in = ?, messages_out = ?,
+                                              reopened_from = ?, reopen_score = ?, reopen_llm = ?
                                 WHERE id = ?
-                                """,
+                                """.formatted(tables.ticket()),
                         Timestamp.valueOf(t.lastActivity),
                         Timestamp.valueOf(staleAt(t)),
                         toTimestamp(t.firstResponseAt),

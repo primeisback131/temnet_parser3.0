@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS message (
     UNIQUE KEY uq_message_dedup (dedup_hash),
     KEY idx_message_client_time (client, created_at),
     KEY idx_message_created (created_at),
-    KEY idx_message_author (author)
+    KEY idx_message_author (author),
+    KEY idx_message_recipient (recipient),
+    KEY idx_message_source (source_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- A support ticket reconstructed by the ingest state machine. Lifecycle:
@@ -66,6 +68,12 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS first_responder VARCHAR(191) NULL AF
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS frt_seconds BIGINT NULL AFTER first_responder;
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resolution_seconds BIGINT NULL AFTER closed_by;
 
+-- Desk-scoped queries filter on recipient as much as on author, and the sync
+-- asks "which of these source ids made it in" for every batch: without these
+-- two indexes each of those is a full scan of the biggest table.
+ALTER TABLE message ADD INDEX IF NOT EXISTS idx_message_recipient (recipient);
+ALTER TABLE message ADD INDEX IF NOT EXISTS idx_message_source (source_id);
+
 -- The moment a ticket's silence crosses the expiry threshold: last_activity
 -- plus 20 WORKING hours, precomputed at ingest (business-time arithmetic can
 -- not be done reliably in SQL). It is the ticket's "death by silence" time,
@@ -99,10 +107,11 @@ CREATE TABLE IF NOT EXISTS llm_verdict (
     PRIMARY KEY (client, opened_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Which client groups each help account actually serves, derived from the
--- conversations. Materialized by the sync job: deriving it on the fly costs
--- ~3 s (full scan of `message`), far too slow for an authorization check on
--- every request. Grants of type 'help_account' expand through this table.
+-- Which client groups each help account serves, copied by the sync job from
+-- ejabberd's shared-roster configuration (sr_group.opts `displayed_groups`
+-- joined with the account's help group in sr_user). Grants of type
+-- 'help_account' expand through this table; it is NOT used to filter data,
+-- only to list the groups a desk may see.
 CREATE TABLE IF NOT EXISTS help_account_group (
     account VARCHAR(191) NOT NULL,
     grp     VARCHAR(191) NOT NULL,
@@ -128,6 +137,10 @@ CREATE TABLE IF NOT EXISTS app_user (
 -- MODIFY re-states the whole column, so re-running it is a no-op.
 ALTER TABLE app_user MODIFY COLUMN role ENUM('admin','manager','user') NOT NULL DEFAULT 'manager';
 
+-- A temporary password - generated at install or issued by an administrator -
+-- has to be replaced by the account holder before anything else is allowed.
+ALTER TABLE app_user ADD COLUMN IF NOT EXISTS must_change_password TINYINT(1) NOT NULL DEFAULT 0 AFTER enabled;
+
 -- One granted scope: a whole help account (expanded via help_account_group)
 -- or a single client group. Metrics and chat access are granted separately —
 -- chats expose the correspondence itself, aggregates do not.
@@ -146,5 +159,9 @@ CREATE TABLE IF NOT EXISTS user_grant (
 CREATE TABLE IF NOT EXISTS client_group (
     client VARCHAR(191) NOT NULL,
     grp    VARCHAR(191) NOT NULL,
-    PRIMARY KEY (client, grp)
+    PRIMARY KEY (client, grp),
+    KEY idx_client_group_grp (grp)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Group pickers and per-group reports look the table up by group name.
+ALTER TABLE client_group ADD INDEX IF NOT EXISTS idx_client_group_grp (grp);

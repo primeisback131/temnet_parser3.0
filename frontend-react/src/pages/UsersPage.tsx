@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useGroups, useUsers } from "../api/queries";
 import type { UserStat } from "../api/types";
 import { useAuth } from "../auth";
+import QueryError from "../components/QueryError";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel } from "../lib/excel";
 
@@ -18,6 +19,17 @@ const columns: ColumnsType<UserStat> = [
   { title: "Всего сообщений", dataIndex: "totalMessages", sorter: (a, b) => a.totalMessages - b.totalMessages },
 ];
 
+/** The table as an Excel sheet, with the same Russian headers the screen shows. */
+function userRows(rows: UserStat[]) {
+  return rows.map((u) => ({
+    "Имя пользователя": u.userName,
+    "Закрытых заявок": u.closedRequests,
+    "Отклоненных заявок": u.rejectedRequests,
+    "Открытых на конец периода": u.openRequests,
+    "Всего сообщений": u.totalMessages,
+  }));
+}
+
 export default function UsersPage() {
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
@@ -27,8 +39,8 @@ export default function UsersPage() {
   const endStr = toApiDate(end);
 
   const { canExport } = useAuth();
-  const { data: groups = [] } = useGroups();
-  const { data = [], isFetching } = useUsers(startStr, endStr, group);
+  const { data: groups = [], error: groupsError } = useGroups();
+  const { data = [], isFetching, error } = useUsers(startStr, endStr, group);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return data;
@@ -69,7 +81,7 @@ export default function UsersPage() {
               <Button
                 icon={<FileExcelOutlined />}
                 onClick={() =>
-                  exportToExcel(filtered, `${group ?? "users"}_${startStr}_${endStr}.xlsx`, "Пользователи")
+                  void exportToExcel(userRows(filtered), `${group ?? "users"}_${startStr}_${endStr}.xlsx`, "Пользователи")
                 }
                 disabled={filtered.length === 0}
               >
@@ -79,6 +91,7 @@ export default function UsersPage() {
           )}
         </Space>
       </div>
+      <QueryError error={groupsError ?? error} />
       {group ? (
         <Table
           rowKey="userName"

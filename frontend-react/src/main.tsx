@@ -9,6 +9,7 @@ import "dayjs/locale/ru";
 import "antd/dist/reset.css";
 import "./styles.css";
 import App from "./App";
+import { ApiError } from "./api/client";
 import { AuthProvider } from "./auth";
 import { buildTheme } from "./lib/antdTheme";
 import { applyThemeMode, initialThemeMode, ThemeModeProvider, useThemeMode } from "./theme";
@@ -22,7 +23,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      // One retry for flaky networks and server hiccups; a 4xx is the
+      // backend's final word (no session, no rights, bad parameters).
+      retry: (failureCount, error) =>
+        failureCount < 1 && !(error instanceof ApiError && error.status < 500),
     },
   },
 });

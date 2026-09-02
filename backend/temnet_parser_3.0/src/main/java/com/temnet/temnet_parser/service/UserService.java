@@ -8,54 +8,64 @@ import com.temnet.temnet_parser.security.AppPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.CacheManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 
-/** Managing application accounts and their grants. */
+/**
+ * Managing application accounts and their grants.
+ * <p>
+ * Every write runs in one transaction on the analytics database (the account
+ * tables live there), so a failure half-way never leaves a user with some of
+ * their grants. The transaction manager is named explicitly: the ejabberd dump
+ * is the primary datasource and would otherwise be picked by default.
+ */
 @Service
 public class UserService {
 
     private static final Logger log = LoggerFactory.getLogger(UserService.class);
+    private static final int MIN_PASSWORD_LENGTH = 8;
     private static final Set<String> ROLES =
             Set.of(UserAccount.ROLE_ADMIN, UserAccount.ROLE_MANAGER, UserAccount.ROLE_USER);
     private static final Set<String> SCOPE_TYPES = Set.of(Grant.HELP_ACCOUNT, Grant.GROUP);
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final CacheManager cacheManager;
     private final String initialAdminPassword;
 
-    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder, CacheManager cacheManager,
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder,
                        @Value("${app.admin.initial-password:}") String initialAdminPassword) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
-        this.cacheManager = cacheManager;
         this.initialAdminPassword = initialAdminPassword;
     }
 
     /**
      * Creates the first administrator on an empty install, so a fresh
      * deployment is reachable without touching the database by hand. The
-     * password comes from APP_ADMIN_PASSWORD, or is generated and logged once.
+     * password comes from APP_ADMIN_PASSWORD, or is generated and logged once —
+     * and a generated one is temporary: it has to be replaced at first login,
+     * so a password that once passed through a log file never stays valid.
      */
+    @Transactional("analyticsTxManager")
     public void ensureAdminExists() {
         if (userRepository.countUsers() > 0) {
             return;
         }
-        String password = initialAdminPassword.isBlank() ? randomPassword() : initialAdminPassword;
+        boolean generated = initialAdminPassword.isBlank();
+        String password = generated ? randomPassword() : initialAdminPassword;
         userRepository.create("admin", passwordEncoder.encode(password), "Администратор",
-                UserAccount.ROLE_ADMIN, true);
-        if (initialAdminPassword.isBlank()) {
-            log.warn("Создан аккаунт administrator 'admin' с временным паролем: {} — смените его после входа",
+                UserAccount.ROLE_ADMIN, true, generated);
+        if (generated) {
+            log.warn("Создан администратор 'admin' с временным паролем: {} — при первом входе его потребуется сменить",
                     password);
         } else {
-            log.info("Создан аккаунт администратора 'admin' с паролем из APP_ADMIN_PASSWORD");
+            log.info("Создан администратор 'admin' с паролем из APP_ADMIN_PASSWORD");
         }
     }
 
@@ -73,22 +83,22 @@ public class UserService {
         return userRepository.allHelpAccounts();
     }
 
+    /** Creates an account with a temporary password the user replaces at first login. */
+    @Transactional("analyticsTxManager")
     public long create(String username, String password, String fullName, String role, boolean enabled,
                        List<Grant> grants) {
         validate(username, role, grants);
-        if (password == null || password.length() < 8) {
-            throw new IllegalArgumentException("Пароль должен быть не короче 8 символов");
+        validatePassword(password);
+        String login = username.trim();
+        if (userRepository.findPrincipal(login).isPresent()) {
+            throw new IllegalArgumentException("Логин уже занят: " + login);
         }
-        long id = userRepository.create(username.trim(), passwordEncoder.encode(password), fullName, role, enabled);
+        long id = userRepository.create(login, passwordEncoder.encode(password), fullName, role, enabled, true);
         userRepository.replaceGrants(id, forRole(role, grants));
-        evictScopes();
         return id;
     }
 
-    /**
-     * Demoting or disabling the last active administrator is refused for the
-     * same reason deleting one is: nobody would be left to manage accounts.
-     */
+    @Transactional("analyticsTxManager")
     public void update(long id, String fullName, String role, boolean enabled, List<Grant> grants) {
         validate(null, role, grants);
         AppPrincipal target = require(id);
@@ -99,7 +109,6 @@ public class UserService {
         }
         userRepository.updateProfile(id, fullName, role, enabled);
         userRepository.replaceGrants(id, forRole(role, grants));
-        evictScopes();
     }
 
     /**
@@ -116,19 +125,34 @@ public class UserService {
                 .toList();
     }
 
+    /** An administrator issues a temporary password; the user must replace it at next login. */
+    @Transactional("analyticsTxManager")
     public void changePassword(long id, String password) {
-        if (password == null || password.length() < 8) {
-            throw new IllegalArgumentException("Пароль должен быть не короче 8 символов");
+        validatePassword(password);
+        require(id);
+        userRepository.updatePassword(id, passwordEncoder.encode(password), true);
+    }
+
+    /** The account holder replaces their password, proving ownership with the current one. */
+    @Transactional("analyticsTxManager")
+    public void changeOwnPassword(long id, String currentPassword, String newPassword) {
+        AppPrincipal me = require(id);
+        if (currentPassword == null || !passwordEncoder.matches(currentPassword, me.getPassword())) {
+            throw new IllegalArgumentException("Текущий пароль указан неверно");
         }
-        userRepository.updatePassword(id, passwordEncoder.encode(password));
+        validatePassword(newPassword);
+        if (passwordEncoder.matches(newPassword, me.getPassword())) {
+            throw new IllegalArgumentException("Новый пароль совпадает с текущим");
+        }
+        userRepository.updatePassword(id, passwordEncoder.encode(newPassword), false);
     }
 
     /**
      * Deleting yourself would end the very session doing it, and deleting the
-     * last administrator would leave nobody able to manage accounts - the
-     * bootstrap only runs on an empty table, so with other accounts around
-     * that state is permanent.
+     * last administrator would leave nobody able to manage accounts — the
+     * bootstrap only runs on an empty table, so that state is permanent.
      */
+    @Transactional("analyticsTxManager")
     public void delete(long id, long requestedBy) {
         if (id == requestedBy) {
             throw new IllegalArgumentException("Нельзя удалить собственную учётную запись");
@@ -138,7 +162,6 @@ public class UserService {
             requireAnotherAdmin(id);
         }
         userRepository.delete(id);
-        evictScopes();
     }
 
     private AppPrincipal require(long id) {
@@ -149,6 +172,12 @@ public class UserService {
     private void requireAnotherAdmin(long exceptId) {
         if (userRepository.countEnabledAdminsExcluding(exceptId) == 0) {
             throw new IllegalArgumentException("Нельзя лишить прав последнего администратора");
+        }
+    }
+
+    private static void validatePassword(String password) {
+        if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException("Пароль должен быть не короче " + MIN_PASSWORD_LENGTH + " символов");
         }
     }
 
@@ -166,14 +195,6 @@ public class UserService {
             if (g.scopeValue() == null || g.scopeValue().isBlank()) {
                 throw new IllegalArgumentException("Пустое значение доступа");
             }
-        }
-    }
-
-    /** Permissions are cached per user; a change must take effect at once. */
-    private void evictScopes() {
-        var cache = cacheManager.getCache("accessibleGroups");
-        if (cache != null) {
-            cache.clear();
         }
     }
 }

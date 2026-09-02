@@ -7,8 +7,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @Service
 public class ChatService {
@@ -19,15 +17,13 @@ public class ChatService {
         this.chatRepository = chatRepository;
     }
 
-    public List<ChatMessage> history(LocalDate start, LocalDate end, Scope scope) {
-        return chatRepository.findHistory(start, end, scope);
+    /** The scope's correspondence in the period, or one client's conversation when {@code client} is given. */
+    public List<ChatMessage> history(LocalDate start, LocalDate end, Scope scope, String client) {
+        return chatRepository.findHistory(start, end, scope, client);
     }
 
-    /** Distinct senders in the group's history, excluding the support ("help") side. */
-    public Set<String> participants(LocalDate start, LocalDate end, Scope scope) {
-        return history(start, end, scope).stream()
-                .map(ChatMessage::sender)
-                .filter(sender -> !sender.contains("help"))
-                .collect(Collectors.toUnmodifiableSet());
+    /** Clients who talked to support in the period — the conversation list. */
+    public List<String> participants(LocalDate start, LocalDate end, Scope scope) {
+        return chatRepository.findParticipants(start, end, scope);
     }
 }

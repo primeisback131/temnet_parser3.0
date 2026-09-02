@@ -5,7 +5,6 @@ import com.temnet.temnet_parser.repository.UserRepository;
 import com.temnet.temnet_parser.security.AppPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.cache.CacheManager;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
@@ -34,7 +33,7 @@ class UserServiceTest {
     @BeforeEach
     void setUp() {
         repository = mock(UserRepository.class);
-        service = new UserService(repository, mock(PasswordEncoder.class), mock(CacheManager.class), "");
+        service = new UserService(repository, mock(PasswordEncoder.class), "");
         when(repository.findPrincipalById(ADMIN)).thenReturn(Optional.of(principal(ADMIN, "admin", true)));
         when(repository.findPrincipalById(MANAGER)).thenReturn(Optional.of(principal(MANAGER, "manager", true)));
     }
@@ -95,6 +94,6 @@ class UserServiceTest {
     }
 
     private static AppPrincipal principal(long id, String role, boolean enabled) {
-        return new AppPrincipal(id, "user" + id, "User " + id, "hash", role, enabled);
+        return new AppPrincipal(id, "user" + id, "User " + id, "hash", role, enabled, false);
     }
 }
