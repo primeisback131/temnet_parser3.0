@@ -135,7 +135,7 @@ export default function CompaniesPage() {
   const { canExport } = useAuth();
   const { data = [], isFetching } = useCompanies(startStr, endStr);
   // The desk list only feeds the report picker, and /help-accounts is closed to
-  // read-only accounts — asking for it would just earn a 403.
+  // read-only accounts - asking for it would just earn a 403.
   const { data: helpAccounts = [] } = useHelpAccounts(canExport);
 
   const filtered = useMemo(() => {
@@ -153,7 +153,7 @@ export default function CompaniesPage() {
     try {
       const ranges = monthlyRanges(start, end);
 
-      // Up to one month — a single workbook, as before.
+      // Up to one month - a single workbook, as before.
       if (ranges.length === 1) {
         const report = await api.getHelpAccountReport(startStr, endStr, helpAccount);
         if (report.users.length === 0) {
@@ -164,7 +164,7 @@ export default function CompaniesPage() {
         return;
       }
 
-      // Longer periods — one workbook per calendar month, zipped together.
+      // Longer periods - one workbook per calendar month, zipped together.
       const files: WorkbookFile[] = [];
       for (let i = 0; i < ranges.length; i++) {
         const [monthStart, monthEnd] = ranges[i];
@@ -199,7 +199,7 @@ export default function CompaniesPage() {
       message.open({
         key: progressKey,
         type: "success",
-        content: `Архив сформирован: отчётов за месяцы — ${files.length}`,
+        content: `Архив сформирован: отчётов за месяцы - ${files.length}`,
         duration: 3,
       });
     } catch (e) {
@@ -218,51 +218,56 @@ export default function CompaniesPage() {
 
   return (
     <Card>
-      <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }} wrap>
-        <Input.Search
-          placeholder="Поиск группы"
-          allowClear
-          style={{ width: 240 }}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <RangePicker
-          value={[start, end]}
-          onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
-          allowClear={false}
-        />
-        {canExport && (
-          <Space wrap>
-            <Select
-              placeholder="Help-аккаунт"
-              allowClear
-              showSearch
-              style={{ width: 200 }}
-              value={helpAccount}
-              onChange={(v) => setHelpAccount(v ?? null)}
-              options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
-            />
-            <Tooltip title="Отчёт по всем организациям выбранного help-аккаунта: все метрики по группам (первый ответ, время решения, повторы, динамика, категории) + лист на каждую группу пользователей. За период больше месяца — zip-архив с отчётом за каждый месяц">
-              <Button
-                icon={<FileExcelOutlined />}
-                onClick={exportHelpReport}
-                loading={exporting}
-                disabled={!helpAccount}
-              >
-                Отчёт по help
-              </Button>
-            </Tooltip>
-            <Tooltip title="Экспорт таблицы">
-              <Button
-                icon={<FileExcelOutlined />}
-                onClick={() => exportToExcel(filtered, `groups_${startStr}_${endStr}.xlsx`, "Группы")}
-                disabled={filtered.length === 0}
-              >
-                Excel
-              </Button>
-            </Tooltip>
-          </Space>
-        )}
-      </Space>
+      <div className="table-toolbar">
+        <Space wrap size={12}>
+          <Input.Search
+            placeholder="Поиск группы"
+            allowClear
+            style={{ width: 240 }}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <RangePicker
+            value={[start, end]}
+            onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
+            allowClear={false}
+          />
+        </Space>
+        <Space wrap size={12}>
+          <span className="meta">{filtered.length} групп</span>
+          {canExport && (
+            <>
+              <Select
+                placeholder="Help-аккаунт"
+                allowClear
+                showSearch
+                style={{ width: 200 }}
+                value={helpAccount}
+                onChange={(v) => setHelpAccount(v ?? null)}
+                options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
+              />
+              <Tooltip title="Все метрики по группам аккаунта плюс лист на каждую группу. Период больше месяца выгружается zip-архивом по месяцам">
+                <Button
+                  icon={<FileExcelOutlined />}
+                  onClick={exportHelpReport}
+                  loading={exporting}
+                  disabled={!helpAccount}
+                >
+                  Отчёт по help
+                </Button>
+              </Tooltip>
+              <Tooltip title="Экспорт таблицы">
+                <Button
+                  icon={<FileExcelOutlined />}
+                  onClick={() => exportToExcel(filtered, `groups_${startStr}_${endStr}.xlsx`, "Группы")}
+                  disabled={filtered.length === 0}
+                >
+                  Excel
+                </Button>
+              </Tooltip>
+            </>
+          )}
+        </Space>
+      </div>
       <Table
         rowKey="groupName"
         columns={columns}
@@ -271,6 +276,7 @@ export default function CompaniesPage() {
         pagination={false}
         size="middle"
         scroll={{ x: true }}
+        sticky={{ offsetHeader: 60 }}
       />
     </Card>
   );

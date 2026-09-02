@@ -73,11 +73,13 @@ temnet_parser_3.0/
 │     └─ test/java/...                 ApplicationTests (context load)
 ├─ frontend-react/                     React-приложение (Vite dev на 5173)
 │  └─ src/
-│     ├─ main.tsx, App.tsx             bootstrap + роутинг + тема
+│     ├─ main.tsx, App.tsx             bootstrap + роутинг
+│     ├─ theme.tsx, styles.css         светлая/тёмная тема, CSS-переменные
 │     ├─ api/                          client, query-хуки, типы
 │     ├─ auth.tsx                      контекст входа и прав
-│     ├─ components/                   AppLayout, EChart
-│     ├─ lib/                          date, excel, format
+│     ├─ components/                   AppLayout, EChart, StatCard, BrandMark
+│     ├─ lib/                          palette, antdTheme, chartTheme, date,
+│     │                                excel, format
 │     └─ pages/                        экраны
 ├─ run_backend.bat / run_frontend.bat  запуск
 └─ docs/                               эта документация
@@ -369,14 +371,40 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
 
 ### Компоненты и утилиты
 
-- [`AppLayout`](../frontend-react/src/components/AppLayout.tsx) — сайдбар-меню + контент (`<Outlet/>`).
+- [`AppLayout`](../frontend-react/src/components/AppLayout.tsx) — сайдбар-меню
+  (сгруппированное по разделам) + шапка + контент (`<Outlet/>`).
 - [`EChart`](../frontend-react/src/components/EChart.tsx) — тонкая обёртка над
-  `echarts` (init / setOption / resize / dispose); используется напрямую,
-  без `echarts-for-react`.
+  `echarts` (init / setOption / ResizeObserver / dispose); используется напрямую,
+  без `echarts-for-react`. Тема графика берётся из зарегистрированных
+  `temnet-light` / `temnet-dark`.
+- [`StatCard`](../frontend-react/src/components/StatCard.tsx) — KPI-плитка:
+  подпись, число, подсказка и спарклайн (инлайновый SVG, без второго
+  экземпляра ECharts).
 - `lib/` — [`date.ts`](../frontend-react/src/lib/date.ts) (формат `yyyy-MM-dd`,
   дефолтный диапазон), [`format.ts`](../frontend-react/src/lib/format.ts)
   (`humanizeSeconds`), [`excel.ts`](../frontend-react/src/lib/excel.ts)
   (экспорт в `.xlsx`, ExcelJS грузится лениво).
+
+### Тема и цвета
+
+Единственный источник цвета — [`lib/palette.ts`](../frontend-react/src/lib/palette.ts):
+акценты серий (`accent`) и шкала поверхностей/текста/границ (`tokens`) для
+каждого режима. Его читают три потребителя, и ни один из них не хранит хексы
+у себя:
+
+- [`theme.tsx`](../frontend-react/src/theme.tsx) публикует `tokens` в `<html>`
+  как CSS-переменные (`--surface`, `--border`, `--text-muted` …) — до первой
+  отрисовки, чтобы не было вспышки нестилизованного контента; их использует
+  [`styles.css`](../frontend-react/src/styles.css);
+- [`lib/antdTheme.ts`](../frontend-react/src/lib/antdTheme.ts) раскладывает те же
+  значения в токены Ant Design (`ConfigProvider`), включая токены Layout, Menu,
+  Card, Table;
+- [`lib/chartTheme.ts`](../frontend-react/src/lib/chartTheme.ts) собирает из них
+  две темы ECharts (оси, сетка, легенда, тултип, dataZoom, visualMap) плюс
+  хелперы градиентов (`areaFade`, `barFade`, `barFadeX`).
+
+Сайдбар и меню всегда работают в «светлой» теме Ant Design: их вид полностью
+задан явными токенами, поэтому параллельное семейство `dark*`-токенов не нужно.
 
 ### Поток данных
 

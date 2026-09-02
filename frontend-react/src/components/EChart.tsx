@@ -1,7 +1,11 @@
 import type { EChartsOption } from "echarts";
 import * as echarts from "echarts";
 import { useEffect, useRef } from "react";
+import { chartColors, CHART_THEME, registerChartThemes } from "../lib/chartTheme";
+import { tokens } from "../lib/palette";
 import { useThemeMode } from "../theme";
+
+registerChartThemes();
 
 interface Props {
   option: EChartsOption;
@@ -9,10 +13,13 @@ interface Props {
   loading?: boolean;
 }
 
+const prefersReducedMotion = () =>
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 /**
  * Thin React wrapper around an ECharts instance (init / update / resize /
  * dispose). Follows the app light/dark mode: switching the mode re-creates
- * the chart with the matching ECharts theme.
+ * the chart with the matching registered theme (see lib/chartTheme.ts).
  */
 export default function EChart({ option, height = 380, loading = false }: Props) {
   const elementRef = useRef<HTMLDivElement>(null);
@@ -27,37 +34,66 @@ export default function EChart({ option, height = 380, loading = false }: Props)
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
 
-  // The built-in "dark" theme paints its own dark canvas; keep it transparent
-  // so the chart sits on the antd Card background.
-  const applyOption = (chart: echarts.ECharts, opt: EChartsOption) =>
-    // `true` clears stale series when the shape of the option changes.
-    chart.setOption({ backgroundColor: "transparent", ...opt }, true);
+  const showLoading = (chart: echarts.ECharts) =>
+    chart.showLoading("default", {
+      text: "",
+      color: chartColors(mode).blue,
+      maskColor: "transparent",
+      spinnerRadius: 12,
+      lineWidth: 2,
+      zlevel: 10,
+    });
 
   useEffect(() => {
-    if (!elementRef.current) return;
-    const chart = echarts.init(elementRef.current, mode === "dark" ? "dark" : undefined);
+    const element = elementRef.current;
+    if (!element) return;
+    const chart = echarts.init(element, CHART_THEME[mode], { renderer: "canvas" });
     chartRef.current = chart;
-    applyOption(chart, optionRef.current);
-    if (loadingRef.current) chart.showLoading();
-    const onResize = () => chart.resize();
-    window.addEventListener("resize", onResize);
+    // `true` clears stale series when the shape of the option changes.
+    chart.setOption(
+      { backgroundColor: "transparent", animation: !prefersReducedMotion(), ...optionRef.current },
+      true,
+    );
+    if (loadingRef.current) showLoading(chart);
+
+    // The sider collapses and cards reflow without a window resize event,
+    // so the element itself is what gets watched.
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => chart.resize());
+    });
+    observer.observe(element);
+
     return () => {
-      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(frame);
+      observer.disconnect();
       chart.dispose();
       chartRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
   useEffect(() => {
-    if (chartRef.current) applyOption(chartRef.current, option);
+    chartRef.current?.setOption(
+      { backgroundColor: "transparent", animation: !prefersReducedMotion(), ...option },
+      true,
+    );
   }, [option]);
 
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    if (loading) chart.showLoading();
+    if (loading) showLoading(chart);
     else chart.hideLoading();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
-  return <div ref={elementRef} style={{ width: "100%", height }} />;
+  return (
+    <div
+      ref={elementRef}
+      style={{ width: "100%", height, color: tokens[mode].text }}
+      role="img"
+    />
+  );
 }

@@ -146,7 +146,7 @@ export interface ChatMessage {
 
 /** Tickets still open at the end of the period, and the moment it describes. */
 export interface BacklogReport {
-  asOf: string; // ISO datetime — period end, or the freshest message if earlier
+  asOf: string; // ISO datetime - period end, or the freshest message if earlier
   openTickets: number;
 }
 
@@ -241,7 +241,7 @@ export interface SyncSummary {
   durationMs: number;
 }
 
-/** Current (or last) sync run — polled while a rebuild is in flight. */
+/** Current (or last) sync run - polled while a rebuild is in flight. */
 export interface SyncRun {
   kind: "scheduled" | "incremental" | "rebuild";
   startedBy: string;
@@ -252,7 +252,7 @@ export interface SyncRun {
   error: string | null;
 }
 
-/** GET /admin/sync/status — DB counters keep their SQL column names. */
+/** GET /admin/sync/status - DB counters keep their SQL column names. */
 export interface SyncStatus {
   last_archive_id: number;
   last_run_at: string | null;

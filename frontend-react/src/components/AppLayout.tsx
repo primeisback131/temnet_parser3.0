@@ -10,12 +10,17 @@ import {
   SunOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { Button, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
+import { Button, Layout, Menu, Tag, Tooltip } from "antd";
+import type { MenuProps } from "antd";
+import type { ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
+import BrandMark from "./BrandMark";
 
 const { Header, Sider, Content } = Layout;
+
+type MenuItem = NonNullable<MenuProps["items"]>[number];
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -24,49 +29,89 @@ export default function AppLayout() {
   const { user, logout, canUseChats, canViewMetrics } = useAuth();
 
   // The menu only offers what the backend would actually serve.
-  const items = [
-    ...(canUseChats ? [{ key: "/chat", icon: <MessageOutlined />, label: "Чат" }] : []),
-    ...(canViewMetrics ? [{ key: "/metrics", icon: <LineChartOutlined />, label: "Метрики" }] : []),
-    { key: "/companies", icon: <BankOutlined />, label: "Статистика компаний" },
-    { key: "/users", icon: <TeamOutlined />, label: "Статистика пользователей" },
-    ...(canViewMetrics
-      ? [{ key: "/operators", icon: <CustomerServiceOutlined />, label: "Операторы" }]
-      : []),
+  const sections: { label: string; items: { key: string; icon: ReactNode; label: string }[] }[] = [
+    {
+      label: "Аналитика",
+      items: [
+        ...(canUseChats ? [{ key: "/chat", icon: <MessageOutlined />, label: "Чат" }] : []),
+        ...(canViewMetrics ? [{ key: "/metrics", icon: <LineChartOutlined />, label: "Метрики" }] : []),
+        ...(canViewMetrics
+          ? [{ key: "/operators", icon: <CustomerServiceOutlined />, label: "Операторы" }]
+          : []),
+      ],
+    },
+    {
+      label: "Статистика",
+      items: [
+        { key: "/companies", icon: <BankOutlined />, label: "Компании" },
+        { key: "/users", icon: <TeamOutlined />, label: "Пользователи" },
+      ],
+    },
     ...(user?.role === "admin"
       ? [
-          { key: "/admin/users", icon: <SafetyOutlined />, label: "Пользователи" },
-          { key: "/admin/maintenance", icon: <DatabaseOutlined />, label: "Обслуживание" },
+          {
+            label: "Администрирование",
+            items: [
+              { key: "/admin/users", icon: <SafetyOutlined />, label: "Учётные записи" },
+              { key: "/admin/maintenance", icon: <DatabaseOutlined />, label: "Обслуживание" },
+            ],
+          },
         ]
       : []),
-  ];
+  ].filter((s) => s.items.length > 0);
+
+  const flat = sections.flatMap((s) => s.items);
 
   // Longest key first: /users must not swallow /admin/users.
   const selected =
-    [...items]
-      .sort((a, b) => b.key.length - a.key.length)
-      .find((i) => location.pathname.startsWith(i.key))?.key ?? items[0]?.key;
+    [...flat].sort((a, b) => b.key.length - a.key.length).find((i) => location.pathname.startsWith(i.key))
+      ?.key ?? flat[0]?.key;
+
+  const menuItems: MenuItem[] = sections.map((section) => ({
+    type: "group",
+    key: section.label,
+    label: section.label,
+    children: section.items,
+  }));
+
+  const roleTag =
+    user?.role === "admin" ? (
+      <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+        админ
+      </Tag>
+    ) : user?.role === "user" ? (
+      <Tag style={{ marginInlineEnd: 0 }}>просмотр</Tag>
+    ) : null;
 
   return (
-    <Layout style={{ minHeight: "100vh" }}>
-      <Sider breakpoint="lg" collapsedWidth="0" theme="light">
-        <div className="app-logo">Temnet Parser</div>
+    <Layout className="app-shell">
+      <Sider className="app-sider" width={228} breakpoint="lg" collapsedWidth="0" theme="light">
+        <div className="app-brand">
+          <span className="app-brand-mark">
+            <BrandMark />
+          </span>
+          <span className="app-brand-text">
+            <div className="app-brand-name">Temnet Parser</div>
+            <div className="app-brand-sub">аналитика поддержки</div>
+          </span>
+        </div>
         <Menu
+          className="app-nav"
           mode="inline"
           theme="light"
           selectedKeys={selected ? [selected] : []}
-          items={items}
+          items={menuItems}
           onClick={({ key }) => navigate(key)}
         />
       </Sider>
       <Layout>
         <Header className="app-header">
-          <span>{items.find((i) => i.key === selected)?.label}</span>
-          <Space size="middle">
-            <Space size={6}>
-              <Typography.Text type="secondary">{user?.fullName || user?.username}</Typography.Text>
-              {user?.role === "admin" && <Tag color="blue">админ</Tag>}
-              {user?.role === "user" && <Tag>только просмотр</Tag>}
-            </Space>
+          <span className="app-title">{flat.find((i) => i.key === selected)?.label}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="app-user">
+              <span className="app-user-name">{user?.fullName || user?.username}</span>
+              {roleTag}
+            </span>
             <Tooltip title={mode === "dark" ? "Светлая тема" : "Тёмная тема"}>
               <Button
                 type="text"
@@ -78,7 +123,7 @@ export default function AppLayout() {
             <Tooltip title="Выйти">
               <Button type="text" aria-label="Выйти" icon={<LogoutOutlined />} onClick={logout} />
             </Tooltip>
-          </Space>
+          </div>
         </Header>
         <Content className="app-content">
           <Outlet />

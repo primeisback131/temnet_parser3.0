@@ -34,14 +34,14 @@ export class UnauthorizedError extends Error {
   }
 }
 
-/** Thrown on 403 — the account exists but lacks rights for this data. */
+/** Thrown on 403 - the account exists but lacks rights for this data. */
 export class ForbiddenError extends Error {
   constructor() {
     super("Нет доступа к этим данным");
   }
 }
 
-/** Thrown on 409 — the server refuses because the same work is already running. */
+/** Thrown on 409 - the server refuses because the same work is already running. */
 export class ConflictError extends Error {
   constructor() {
     super("Синхронизация уже выполняется");
@@ -82,10 +82,23 @@ async function request<T>(path: string, init: RequestInit, params?: Record<strin
     throw new ConflictError();
   }
   if (!res.ok) {
-    throw new Error(`Запрос ${path} вернул ${res.status} ${res.statusText}`);
+    throw new Error((await problemDetail(res)) ?? `Запрос ${path} вернул ${res.status} ${res.statusText}`);
   }
   const text = await res.text();
   return (text ? JSON.parse(text) : null) as T;
+}
+
+/** A rejected request carries its human-readable reason in the problem body. */
+async function problemDetail(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await res.json();
+    if (typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string") {
+      return body.detail;
+    }
+  } catch {
+    // Not a JSON body - fall back to the status line.
+  }
+  return undefined;
 }
 
 async function getJson<T>(path: string, params?: Record<string, string>): Promise<T> {

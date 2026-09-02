@@ -18,7 +18,7 @@ import { api, ConflictError } from "../api/client";
 import { useSyncStatus } from "../api/queries";
 import type { SyncRun } from "../api/types";
 
-/** Typing this word is what arms the rebuild button — it is not undoable. */
+/** Typing this word is what arms the rebuild button - it is not undoable. */
 const CONFIRM_WORD = "ПЕРЕСОБРАТЬ";
 
 const KIND_LABEL: Record<SyncRun["kind"], string> = {
@@ -48,7 +48,7 @@ export default function MaintenancePage() {
   const running = run?.running ?? false;
 
   // A run publishes no progress, only a start time, so tick the clock
-  // ourselves — the 2-second poll returns an unchanged object and would not
+  // ourselves - the 2-second poll returns an unchanged object and would not
   // re-render on its own.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -109,13 +109,13 @@ export default function MaintenancePage() {
       >
         <Descriptions column={{ xs: 1, sm: 2, lg: 3 }} size="small">
           <Descriptions.Item label="Последняя синхронизация">
-            {status?.last_run_at ? dayjs(status.last_run_at).format("DD.MM.YYYY HH:mm:ss") : "—"}
+            {status?.last_run_at ? dayjs(status.last_run_at).format("DD.MM.YYYY HH:mm:ss") : "-"}
           </Descriptions.Item>
           <Descriptions.Item label="Сообщений в базе">
-            {status ? num(status.messages_total) : "—"}
+            {status ? num(status.messages_total) : "-"}
           </Descriptions.Item>
           <Descriptions.Item label="Позиция в дампе">
-            {status ? num(status.last_archive_id) : "—"}
+            {status ? num(status.last_archive_id) : "-"}
           </Descriptions.Item>
         </Descriptions>
       </Card>
@@ -125,12 +125,8 @@ export default function MaintenancePage() {
           type="warning"
           showIcon
           icon={<Spin size="small" />}
-          message={`Идёт ${KIND_LABEL[run.kind]} — ${elapsed}`}
-          description={
-            <>
-              Запустил: {run.startedBy}. Идет пересборка. Страницу можно закрыть.
-            </>
-          }
+          message={`Идёт ${KIND_LABEL[run.kind]}, ${elapsed}`}
+          description={`Запустил ${run.startedBy}. Страницу можно закрыть.`}
         />
       )}
 
@@ -150,10 +146,9 @@ export default function MaintenancePage() {
           message={`${KIND_LABEL[run.kind]} завершена за ${formatDuration(run.summary.durationMs)}`}
           description={
             <>
-              Просмотрено строк дампа: {num(run.summary.scannedRows)}; новых сообщений:{" "}
-              {num(run.summary.newMessages)}; классифицировано LLM: {num(run.summary.llmClassified)}.
-              Завершено {dayjs(run.finishedAt).format("DD.MM.YYYY HH:mm:ss")}, запускал{" "}
-              {run.startedBy}.
+              Строк дампа: {num(run.summary.scannedRows)}, новых сообщений:{" "}
+              {num(run.summary.newMessages)}, классифицировано LLM: {num(run.summary.llmClassified)}.
+              Завершено {dayjs(run.finishedAt).format("DD.MM.YYYY HH:mm:ss")}, запускал {run.startedBy}.
             </>
           }
         />
@@ -162,8 +157,8 @@ export default function MaintenancePage() {
       <Card title="Обслуживание">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Синхронизация идёт сама каждые 5 минут и забирает из дампа только новые сообщения.
-            Запускать вручную нужно только сразу после того, как залит свежий дамп.
+            Синхронизация идёт сама каждые 5 минут и забирает только новые сообщения. Вручную -
+            сразу после того, как залит свежий дамп.
           </Typography.Paragraph>
           <Space wrap>
             <Button
@@ -183,14 +178,7 @@ export default function MaintenancePage() {
             type="info"
             showIcon
             message="Когда нужна полная пересборка"
-            description={
-              <>
-                Только когда изменились правила разбора: категории, правила классификации заявок, окна
-                истечения и повторных обращений. Пересборка перечитывает весь дамп заново и
-                применяет к нему текущий код - без неё старые заявки останутся посчитанными по
-                старым правилам.
-              </>
-            }
+            description="Только если изменились правила разбора: категории, классификация заявок, окна истечения и повторных обращений. Пересборка перечитывает дамп заново и применяет текущий код; без неё старые заявки останутся посчитанными по старым правилам."
           />
         </Space>
       </Card>
@@ -198,7 +186,7 @@ export default function MaintenancePage() {
       <Modal
         title={
           <Space>
-            <WarningOutlined style={{ color: "#cf1322" }} />
+            <WarningOutlined style={{ color: "var(--danger)" }} />
             Полная пересборка базы аналитики
           </Space>
         }
@@ -225,10 +213,8 @@ export default function MaintenancePage() {
             description={
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 <li>таблицы сообщений и заявок очищаются полностью;</li>
-                <li>весь дамп читается заново - это занимает несколько минут;</li>
-                <li>
-                  пока идёт пересборка, метрики и чаты показывают неполные данные;
-                </li>           
+                <li>весь дамп читается заново, это занимает несколько минут;</li>
+                <li>пока идёт пересборка, метрики и чаты показывают неполные данные.</li>
               </ul>
             }
           />

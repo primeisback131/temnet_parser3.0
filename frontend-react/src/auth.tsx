@@ -10,9 +10,9 @@ interface AuthState {
   logout: () => Promise<void>;
   /** True when the user may see chats of at least one group. */
   canUseChats: boolean;
-  /** Metrics dashboard and operator leaderboard — managers and admins only. */
+  /** Metrics dashboard and operator leaderboard - managers and admins only. */
   canViewMetrics: boolean;
-  /** Excel export — managers and admins only. */
+  /** Excel export - managers and admins only. */
   canExport: boolean;
 }
 

@@ -233,8 +233,8 @@ export default function AdminUsersPage() {
           {v}
           {g.scopeType === "help_account" && (
             <Tooltip title={helpAccounts.find((a) => a.account === v)?.groups.join(", ")}>
-              <span style={{ color: "#8c8c8c" }}>
-                ({helpAccounts.find((a) => a.account === v)?.groups.length ?? 0} гр.)
+              <span className="meta">
+                {helpAccounts.find((a) => a.account === v)?.groups.length ?? 0} гр.
               </span>
             </Tooltip>
           )}
@@ -243,7 +243,7 @@ export default function AdminUsersPage() {
     },
     {
       // For a read-only account the same flag opens the two statistics tables,
-      // not the metrics dashboard — so it is labelled for what it actually does.
+      // not the metrics dashboard - so it is labelled for what it actually does.
       title: isReadOnlyRole ? "Статистика" : "Метрики",
       dataIndex: "canMetrics",
       width: 110,
@@ -259,7 +259,7 @@ export default function AdminUsersPage() {
       ),
     },
     // A read-only account never reads correspondence, so the column is gone
-    // rather than shown disabled — there is nothing to decide.
+    // rather than shown disabled - there is nothing to decide.
     ...(isReadOnlyRole
       ? []
       : [
@@ -296,13 +296,12 @@ export default function AdminUsersPage() {
 
   return (
     <Card>
-      <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }}>
-        <span style={{ color: "#8c8c8c" }}>
-        </span>
+      <div className="table-toolbar">
+        <span className="meta">{users.length} учётных записей</span>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openDialog(null)}>
           Добавить
         </Button>
-      </Space>
+      </div>
       <Table rowKey="id" columns={columns} dataSource={users} loading={loading} pagination={false} />
 
       <Modal
@@ -357,7 +356,7 @@ export default function AdminUsersPage() {
 
         {isAdminRole ? (
           <Tag color="blue" style={{ marginTop: 8 }}>
-            Администратор видит все группы и управляет пользователями — доступы указывать не нужно
+            Администратор видит все группы, доступы указывать не нужно
           </Tag>
         ) : (
           <>
@@ -370,9 +369,9 @@ export default function AdminUsersPage() {
                 value={[]}
                 options={helpAccounts.map((a) => ({
                   value: a.account,
-                  // Show what the grant actually covers — it is derived from the
+                  // Show what the grant actually covers - it is derived from the
                   // correspondence, not configured by hand.
-                  label: `${a.account} — ${a.groups.length} гр.`,
+                  label: `${a.account} · ${a.groups.length} гр.`,
                   title: a.groups.join(", "),
                 }))}
                 onChange={(v) => addGrants("help_account", v)}
@@ -394,14 +393,14 @@ export default function AdminUsersPage() {
               dataSource={grants}
               size="small"
               pagination={false}
-              locale={{ emptyText: "Доступы не выданы — пользователь не увидит ничего" }}
+              locale={{ emptyText: "Доступы не выданы: пользователь не увидит ничего" }}
             />
           </>
         )}
       </Modal>
 
       <Modal
-        title={`Смена пароля — ${passwordFor?.username ?? ""}`}
+        title={`Смена пароля: ${passwordFor?.username ?? ""}`}
         open={passwordFor !== null}
         onCancel={() => setPasswordFor(null)}
         onOk={savePassword}

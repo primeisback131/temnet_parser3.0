@@ -5,6 +5,7 @@ import com.temnet.temnet_parser.dto.HelpAccountScope;
 import com.temnet.temnet_parser.dto.UserAccount;
 import com.temnet.temnet_parser.security.AppPrincipal;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -19,6 +20,14 @@ import java.util.stream.Collectors;
 @Repository
 public class UserRepository {
 
+    private static final RowMapper<AppPrincipal> PRINCIPAL = (rs, i) -> new AppPrincipal(
+            rs.getLong("id"),
+            rs.getString("username"),
+            rs.getString("full_name"),
+            rs.getString("password_hash"),
+            rs.getString("role"),
+            rs.getBoolean("enabled"));
+
     private final JdbcClient jdbcClient;
 
     public UserRepository(@Qualifier("analyticsJdbcClient") JdbcClient jdbcClient) {
@@ -31,18 +40,30 @@ public class UserRepository {
                         FROM app_user WHERE username = :username
                         """)
                 .param("username", username)
-                .query((rs, i) -> new AppPrincipal(
-                        rs.getLong("id"),
-                        rs.getString("username"),
-                        rs.getString("full_name"),
-                        rs.getString("password_hash"),
-                        rs.getString("role"),
-                        rs.getBoolean("enabled")))
+                .query(PRINCIPAL)
+                .optional();
+    }
+
+    public Optional<AppPrincipal> findPrincipalById(long id) {
+        return jdbcClient.sql("""
+                        SELECT id, username, full_name, password_hash, role, enabled
+                        FROM app_user WHERE id = :id
+                        """)
+                .param("id", id)
+                .query(PRINCIPAL)
                 .optional();
     }
 
     public long countUsers() {
         return jdbcClient.sql("SELECT COUNT(*) FROM app_user").query(Long.class).single();
+    }
+
+    /** Active administrators other than the given one - must never reach zero. */
+    public long countEnabledAdminsExcluding(long id) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM app_user WHERE role = 'admin' AND enabled = 1 AND id <> :id")
+                .param("id", id)
+                .query(Long.class)
+                .single();
     }
 
     public List<UserAccount> findAll() {

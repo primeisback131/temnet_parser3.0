@@ -1,8 +1,15 @@
-import { FileExcelOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Empty, Modal, Row, Segmented, Select, Space, Statistic, Table, Tag, Tooltip } from "antd";
+import {
+  CheckCircleOutlined,
+  FileExcelOutlined,
+  InboxOutlined,
+  MessageOutlined,
+  StopOutlined,
+} from "@ant-design/icons";
+import { Button, Card, Col, DatePicker, Empty, Modal, Row, Segmented, Select, Space, Table, Tag, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { EChartsOption } from "echarts";
+import type { EChartsOption, LineSeriesOption } from "echarts";
 import dayjs from "dayjs";
+import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -20,24 +27,79 @@ import {
 } from "../api/queries";
 import type { Bucket, OpenTicket } from "../api/types";
 import EChart from "../components/EChart";
+import StatCard from "../components/StatCard";
+import { areaFade, barFade, barFadeX, chartColors, dot, legendTop } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel, exportWorkbook } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
+import { tint } from "../lib/palette";
+import { useMediaQuery } from "../lib/useMediaQuery";
+import { useThemeMode } from "../theme";
 
 const { RangePicker } = DatePicker;
 
-const COLORS = {
-  messages: "#3e79f7",
-  closed: "#21b573",
-  rejected: "#ff6b72",
-  backlog: "#ffa940",
-};
+const BUCKET_NOUN: Record<Bucket, string> = { day: "день", week: "неделю", month: "месяц" };
+
+/** Line series with the app's stroke weight and hover behaviour. */
+function line(
+  name: string,
+  color: string,
+  values: number[],
+  extra: Partial<LineSeriesOption> = {},
+): LineSeriesOption {
+  return {
+    name,
+    type: "line",
+    smooth: 0.35,
+    showSymbol: false,
+    symbolSize: 7,
+    lineStyle: { width: 2.4, color },
+    itemStyle: { color },
+    emphasis: { focus: "series", scale: 1.3 },
+    data: values,
+    ...extra,
+  } as LineSeriesOption;
+}
+
+/**
+ * Two invisible stacked series that shade the gap between the typical and
+ * the slow case, so the p50/p90 spread reads as a band instead of two lines.
+ */
+function spreadBand(low: number[], high: number[], color: string): LineSeriesOption[] {
+  const base: Partial<LineSeriesOption> = {
+    type: "line",
+    stack: "spread",
+    silent: true,
+    symbol: "none",
+    smooth: 0.35,
+    lineStyle: { opacity: 0 },
+    tooltip: { show: false },
+    z: 1,
+  };
+  return [
+    { ...base, name: "spread-base", data: low, areaStyle: { opacity: 0 } } as LineSeriesOption,
+    {
+      ...base,
+      name: "spread-fill",
+      data: high.map((v, i) => Math.max(0, v - low[i])),
+      areaStyle: { color: tint(color, 0.16) },
+    } as LineSeriesOption,
+  ];
+}
 
 export default function MetricsPage() {
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
+  const { mode } = useThemeMode();
+  const c = chartColors(mode);
+  // Below this the legend of a two-axis chart spans the full width and would
+  // run into the axis names sitting in the top corners, so those are dropped
+  // (the tooltip still names every series).
+  const narrow = useMediaQuery("(max-width: 700px)");
+  const unit = useMemo(() => (name: string) => (narrow ? {} : { name }), [narrow]);
+  const gridTop = narrow ? 66 : 44;
 
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
@@ -145,7 +207,7 @@ export default function MetricsPage() {
 
   // Overall first-response time. Both values are weighted by responses per
   // bucket; the "median" is therefore a weighted average of per-bucket p50s
-  // (a stable "typical SLA" proxy), not a true overall median — the label
+  // (a stable "typical SLA" proxy), not a true overall median - the label
   // says so. The mean is shown secondarily because it is inflated by slow
   // cross-day replies.
   const overallFrt = useMemo(() => {
@@ -169,18 +231,18 @@ export default function MetricsPage() {
     [data],
   );
 
+  const perBucket = data.length > 0 ? Math.round(totals.messages / data.length) : 0;
+
   const labelFormat = bucket === "month" ? "MMM YYYY" : "DD MMM";
+  const num = (n: number) => n.toLocaleString("ru-RU");
 
   const option = useMemo<EChartsOption>(() => {
     const labels = data.map((p) => dayjs(p.bucket).format(labelFormat));
     return {
       tooltip: { trigger: "axis" },
-      legend: { data: ["Сообщения", "Закрытые", "Отклонённые", "Открытых на конец"], top: 0 },
-      grid: { left: 56, right: 56, top: 40, bottom: 64 },
-      dataZoom: [
-        { type: "inside" },
-        { type: "slider", height: 18, bottom: 16 },
-      ],
+      legend: { data: ["Сообщения", "Закрытые", "Отклонённые", "Открытые"], ...legendTop },
+      grid: { left: 16, right: 16, top: gridTop, bottom: 56, containLabel: true },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 10 }],
       xAxis: {
         type: "category",
         data: labels,
@@ -188,69 +250,52 @@ export default function MetricsPage() {
         axisLabel: { hideOverlap: true },
       },
       yAxis: [
-        { type: "value", name: "Заявки" },
-        { type: "value", name: "Сообщения", position: "right", splitLine: { show: false } },
+        { type: "value", ...unit("заявки") },
+        { type: "value", ...unit("сообщения"), position: "right", splitLine: { show: false } },
       ],
       series: [
-        {
-          name: "Сообщения",
-          type: "line",
+        line("Сообщения", c.blue, data.map((p) => p.messages), {
           yAxisIndex: 1,
-          smooth: true,
-          showSymbol: false,
-          areaStyle: { opacity: 0.12 },
-          lineStyle: { width: 1 },
-          itemStyle: { color: COLORS.messages },
-          data: data.map((p) => p.messages),
-        },
-        {
-          name: "Закрытые",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: COLORS.closed },
-          data: data.map((p) => p.closed),
-        },
-        {
-          name: "Отклонённые",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: COLORS.rejected },
-          data: data.map((p) => p.rejected),
-        },
-        {
-          name: "Открытых на конец",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: COLORS.backlog },
-          data: data.map((p) => p.backlog),
-        },
+          lineStyle: { width: 1.5, color: c.blue, opacity: 0.85 },
+          areaStyle: { color: areaFade(c.blue) },
+          z: 1,
+        }),
+        line("Закрытые", c.green, data.map((p) => p.closed), { z: 3 }),
+        line("Отклонённые", c.rose, data.map((p) => p.rejected), { z: 3 }),
+        line("Открытые", c.amber, data.map((p) => p.backlog), { z: 2 }),
       ],
     };
-  }, [data, labelFormat]);
+  }, [data, labelFormat, c, unit, gridTop]);
 
   const categoriesOption = useMemo<EChartsOption>(() => {
     const named = categoryStats.named;
     return {
       tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-      grid: { left: 120, right: 48, top: 8, bottom: 24 },
-      xAxis: { type: "value" },
-      yAxis: { type: "category", data: named.map((c) => c.category), inverse: true },
+      grid: { left: 14, right: 48, top: 8, bottom: 4, containLabel: true },
+      xAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
+      yAxis: {
+        type: "category",
+        data: named.map((item) => item.category),
+        inverse: true,
+        axisLabel: { color: c.muted, fontSize: 12 },
+      },
       series: [
         {
           type: "bar",
-          data: named.map((c) => c.requests),
-          itemStyle: { color: "#3e79f7", borderRadius: [0, 4, 4, 0] },
-          label: { show: true, position: "right" },
+          data: named.map((v) => v.requests),
+          barMaxWidth: 18,
+          itemStyle: { color: barFadeX(c.blue), borderRadius: [0, 6, 6, 0] },
+          emphasis: { itemStyle: { color: c.blue } },
+          label: { show: true, position: "right", color: c.muted, fontSize: 12 },
         },
       ],
     };
-  }, [categoryStats]);
+  }, [categoryStats, c]);
 
   const slaOption = useMemo<EChartsOption>(() => {
     const labels = sla.map((p) => dayjs(p.bucket).format(labelFormat));
+    const p50 = sla.map((p) => +(p.p50Seconds / 60).toFixed(1));
+    const p90 = sla.map((p) => +(p.p90Seconds / 60).toFixed(1));
     return {
       tooltip: {
         trigger: "axis",
@@ -258,55 +303,35 @@ export default function MetricsPage() {
           const arr = params as unknown as Array<{ axisValue: string; dataIndex: number }>;
           const p = sla[arr[0].dataIndex];
           return (
-            `${arr[0].axisValue}<br/>` +
-            `Медиана (p50): <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
-            `p90: <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
-            `Среднее: ${humanizeSeconds(p.avgSeconds)}<br/>` +
-            `Ответов: ${p.responses}`
+            `<div style="margin-bottom:6px;font-weight:600">${arr[0].axisValue}</div>` +
+            `${dot(c.green)}Медиана <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
+            `${dot(c.amber)}p90 <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
+            `${dot(c.violet)}Среднее ${humanizeSeconds(p.avgSeconds)}<br/>` +
+            `<span style="opacity:.65">Ответов: ${p.responses}</span>`
           );
         },
       },
-      legend: { data: ["Медиана (p50)", "p90", "Среднее"], top: 0 },
-      grid: { left: 56, right: 24, top: 40, bottom: 64 },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      legend: { data: ["Медиана", "p90", "Среднее"], ...legendTop },
+      grid: { left: 16, right: 16, top: gridTop, bottom: 52, containLabel: true },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 8 }],
       xAxis: { type: "category", data: labels, boundaryGap: false, axisLabel: { hideOverlap: true } },
-      yAxis: {
-        type: "value",
-        name: "мин",
-        axisLabel: { formatter: (v: number) => String(Math.round(v)) },
-      },
+      yAxis: { type: "value", ...unit("мин"), axisLabel: { formatter: (v: number) => String(Math.round(v)) } },
       series: [
-        {
-          name: "Медиана (p50)",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: "#21b573" },
-          data: sla.map((p) => +(p.p50Seconds / 60).toFixed(1)),
-        },
-        {
-          name: "p90",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: "#ff7a45" },
-          data: sla.map((p) => +(p.p90Seconds / 60).toFixed(1)),
-        },
-        {
-          name: "Среднее",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          lineStyle: { type: "dashed" },
-          itemStyle: { color: "#9254de" },
-          data: sla.map((p) => +(p.avgSeconds / 60).toFixed(1)),
-        },
+        ...spreadBand(p50, p90, c.amber),
+        line("Медиана", c.green, p50, { z: 3, lineStyle: { width: 2.6, color: c.green } }),
+        line("p90", c.amber, p90, { z: 2, lineStyle: { width: 1.8, color: c.amber } }),
+        line("Среднее", c.violet, sla.map((p) => +(p.avgSeconds / 60).toFixed(1)), {
+          z: 2,
+          lineStyle: { width: 1.6, type: "dashed", color: c.violet },
+        }),
       ],
     };
-  }, [sla, labelFormat]);
+  }, [sla, labelFormat, c, unit, gridTop]);
 
   const resolutionOption = useMemo<EChartsOption>(() => {
     const labels = resolution.map((p) => dayjs(p.bucket).format(labelFormat));
+    const p50 = resolution.map((p) => +(p.p50Seconds / 3600).toFixed(1));
+    const p90 = resolution.map((p) => +(p.p90Seconds / 3600).toFixed(1));
     return {
       tooltip: {
         trigger: "axis",
@@ -314,52 +339,30 @@ export default function MetricsPage() {
           const arr = params as unknown as Array<{ axisValue: string; dataIndex: number }>;
           const p = resolution[arr[0].dataIndex];
           return (
-            `${arr[0].axisValue}<br/>` +
-            `Медиана (p50): <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
-            `p90: <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
-            `Среднее: ${humanizeSeconds(p.avgSeconds)}<br/>` +
-            `Решено: ${p.resolved}`
+            `<div style="margin-bottom:6px;font-weight:600">${arr[0].axisValue}</div>` +
+            `${dot(c.green)}Медиана <b>${humanizeSeconds(p.p50Seconds)}</b><br/>` +
+            `${dot(c.amber)}p90 <b>${humanizeSeconds(p.p90Seconds)}</b><br/>` +
+            `${dot(c.violet)}Среднее ${humanizeSeconds(p.avgSeconds)}<br/>` +
+            `<span style="opacity:.65">Решено: ${p.resolved}</span>`
           );
         },
       },
-      legend: { data: ["Медиана (p50)", "p90", "Среднее"], top: 0 },
-      grid: { left: 56, right: 24, top: 40, bottom: 64 },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      legend: { data: ["Медиана", "p90", "Среднее"], ...legendTop },
+      grid: { left: 16, right: 16, top: gridTop, bottom: 52, containLabel: true },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 8 }],
       xAxis: { type: "category", data: labels, boundaryGap: false, axisLabel: { hideOverlap: true } },
-      yAxis: {
-        type: "value",
-        name: "раб. ч",
-        axisLabel: { formatter: (v: number) => String(Math.round(v)) },
-      },
+      yAxis: { type: "value", ...unit("раб. ч"), axisLabel: { formatter: (v: number) => String(Math.round(v)) } },
       series: [
-        {
-          name: "Медиана (p50)",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: "#21b573" },
-          data: resolution.map((p) => +(p.p50Seconds / 3600).toFixed(1)),
-        },
-        {
-          name: "p90",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: "#ff7a45" },
-          data: resolution.map((p) => +(p.p90Seconds / 3600).toFixed(1)),
-        },
-        {
-          name: "Среднее",
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          lineStyle: { type: "dashed" },
-          itemStyle: { color: "#9254de" },
-          data: resolution.map((p) => +(p.avgSeconds / 3600).toFixed(1)),
-        },
+        ...spreadBand(p50, p90, c.amber),
+        line("Медиана", c.green, p50, { z: 3, lineStyle: { width: 2.6, color: c.green } }),
+        line("p90", c.amber, p90, { z: 2, lineStyle: { width: 1.8, color: c.amber } }),
+        line("Среднее", c.violet, resolution.map((p) => +(p.avgSeconds / 3600).toFixed(1)), {
+          z: 2,
+          lineStyle: { width: 1.6, type: "dashed", color: c.violet },
+        }),
       ],
     };
-  }, [resolution, labelFormat]);
+  }, [resolution, labelFormat, c, unit, gridTop]);
 
   const reopenTotals = useMemo(() => {
     const closed = reopens.reduce((n, p) => n + p.closed, 0);
@@ -372,41 +375,40 @@ export default function MetricsPage() {
   const reopensOption = useMemo<EChartsOption>(() => {
     const labels = reopens.map((p) => dayjs(p.bucket).format(labelFormat));
     return {
-      tooltip: { trigger: "axis" },
-      legend: { data: ["Вероятные", "Подтверждённые", "% от закрытых"], top: 0 },
-      grid: { left: 56, right: 56, top: 40, bottom: 64 },
-      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 16 }],
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+      legend: { data: ["Вероятные", "Подтверждённые", "% от закрытых"], ...legendTop },
+      grid: { left: 16, right: 16, top: gridTop, bottom: 52, containLabel: true },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 8 }],
       xAxis: { type: "category", data: labels, axisLabel: { hideOverlap: true } },
       yAxis: [
-        { type: "value", name: "Повторы" },
-        { type: "value", name: "%", position: "right", splitLine: { show: false } },
+        { type: "value", ...unit("повторы") },
+        { type: "value", ...unit("%"), position: "right", splitLine: { show: false } },
       ],
       series: [
         {
           name: "Вероятные",
           type: "bar",
-          itemStyle: { color: "#9cc0ff" },
+          barMaxWidth: 26,
+          itemStyle: { color: tint(c.blue, 0.35), borderRadius: [5, 5, 0, 0] },
           data: reopens.map((p) => p.probable),
         },
         {
           name: "Подтверждённые",
           type: "bar",
           barGap: "-100%",
-          itemStyle: { color: "#3e79f7" },
+          barMaxWidth: 26,
+          itemStyle: { color: barFade(c.blue), borderRadius: [5, 5, 0, 0] },
           data: reopens.map((p) => p.confirmed),
         },
-        {
-          name: "% от закрытых",
-          type: "line",
-          yAxisIndex: 1,
-          smooth: true,
-          showSymbol: false,
-          itemStyle: { color: "#ff7a45" },
-          data: reopens.map((p) => (p.closed > 0 ? +((p.probable / p.closed) * 100).toFixed(1) : 0)),
-        },
+        line(
+          "% от закрытых",
+          c.amber,
+          reopens.map((p) => (p.closed > 0 ? +((p.probable / p.closed) * 100).toFixed(1) : 0)),
+          { yAxisIndex: 1, z: 3 },
+        ),
       ],
     };
-  }, [reopens, labelFormat]);
+  }, [reopens, labelFormat, c, unit, gridTop]);
 
   const exportReport = async () => {
     const [companies, operators] = await Promise.all([
@@ -418,7 +420,7 @@ export default function MetricsPage() {
         {
           name: "Сводка",
           rows: [
-            { Показатель: "Период", Значение: `${startStr} — ${endStr}` },
+            { Показатель: "Период", Значение: `${startStr} - ${endStr}` },
             { Показатель: "Группа", Значение: group ?? "все" },
             { Показатель: "Сообщений", Значение: totals.messages },
             {
@@ -433,7 +435,7 @@ export default function MetricsPage() {
             { Показатель: "Повторных обращений, % от закрытых", Значение: reopenTotals.rate },
             {
               Показатель: "Первый ответ, медиана",
-              Значение: overallFrt ? humanizeSeconds(overallFrt.median) : "—",
+              Значение: overallFrt ? humanizeSeconds(overallFrt.median) : "-",
             },
           ],
         },
@@ -524,45 +526,55 @@ export default function MetricsPage() {
     const weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
     const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
     const avg = heatmapMode === "avg";
-    const value = (c: { weekday: number; messages: number }) =>
-      avg ? +(c.messages / Math.max(1, weekdayCounts[c.weekday])).toFixed(1) : c.messages;
-    const unit = avg ? "сообщ./день" : "сообщ.";
-    const max = heatmap.reduce((m, c) => Math.max(m, value(c)), 0);
-    const cells = heatmap.map((c) => [c.hour, c.weekday, value(c)]);
+    // A cell is one weekday-hour, so the average divides by how many times that
+    // weekday fell in the period. Messages are whole things: a fractional count
+    // is not a quantity anyone can act on, so it is rounded away.
+    const value = (cell: { weekday: number; messages: number }) =>
+      avg ? Math.round(cell.messages / Math.max(1, weekdayCounts[cell.weekday])) : cell.messages;
+    const unit = avg ? "сообщ. в среднем" : "сообщ.";
+    const max = heatmap.reduce((m, cell) => Math.max(m, value(cell)), 0);
+    const cells = heatmap.map((cell) => [cell.hour, cell.weekday, value(cell)]);
     return {
       tooltip: {
         position: "top",
         formatter: (p) => {
           const v = (p as { value: number[] }).value;
-          return `${weekdays[v[1]]}, ${hours[v[0]]}:00 — ${v[2]} ${unit}`;
+          return `<b>${weekdays[v[1]]}, ${hours[v[0]]}:00</b><br/>${v[2]} ${unit}`;
         },
       },
-      grid: { left: 48, right: 16, top: 10, bottom: 60 },
-      xAxis: { type: "category", data: hours, splitArea: { show: true } },
-      yAxis: { type: "category", data: weekdays, splitArea: { show: true } },
+      grid: { left: 4, right: 8, top: 8, bottom: 56, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: hours,
+        axisLine: { show: false },
+        axisLabel: { interval: 1 },
+      },
+      yAxis: { type: "category", data: weekdays, inverse: true },
       visualMap: {
         min: 0,
         max: max || 1,
         calculable: true,
         orient: "horizontal",
         left: "center",
-        bottom: 8,
-        inRange: { color: ["#eef3ff", "#9cc0ff", "#3e79f7", "#1e3a8a"] },
+        bottom: 4,
+        itemWidth: 12,
+        itemHeight: 130,
       },
       series: [
         {
           type: "heatmap",
           data: cells,
           progressive: 0,
-          emphasis: { itemStyle: { shadowBlur: 6, shadowColor: "rgba(0,0,0,0.3)" } },
+          itemStyle: { borderRadius: 3, borderWidth: 2, borderColor: c.surface },
+          emphasis: { itemStyle: { borderColor: c.text, borderWidth: 1.5, borderRadius: 3 } },
         },
       ],
     };
-  }, [heatmap, heatmapMode, weekdayCounts]);
+  }, [heatmap, heatmapMode, weekdayCounts, c]);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <Card>
+      <Card styles={{ body: { padding: "14px 18px" } }}>
         <Space wrap size={16} style={{ width: "100%", justifyContent: "space-between" }}>
           <Space wrap size={12}>
             <RangePicker
@@ -591,7 +603,7 @@ export default function MetricsPage() {
                 { label: "Месяц", value: "month" },
               ]}
             />
-            <Tooltip title="Сводный отчёт за выбранный период: динамика, SLA, время решения, повторы, категории, операторы, компании">
+            <Tooltip title="Excel со всеми метриками за период">
               <Button icon={<FileExcelOutlined />} onClick={exportReport}>
                 Отчёт
               </Button>
@@ -602,103 +614,149 @@ export default function MetricsPage() {
 
       {alertsReport && alertsReport.alerts.length > 0 && (
         <Card
-          title="Аномалии за последнюю неделю данных"
+          title="Аномалии"
           extra={
             alertsReport.asOf ? (
-              <span style={{ color: "#8c8c8c" }}>
-                {dayjs(alertsReport.weekStart).format("DD MMM")} —{" "}
-                {dayjs(alertsReport.asOf).format("DD MMM YYYY HH:mm")}
+              <span className="meta">
+                {dayjs(alertsReport.weekStart).format("DD MMM")} -{" "}
+                {dayjs(alertsReport.asOf).format("DD MMM YYYY")}
               </span>
             ) : null
           }
         >
-          <Space direction="vertical" size={8}>
-            {alertsReport.alerts.map((a, i) => (
-              <div key={i}>
-                {a.type === "message_spike" ? (
-                  <>
-                    <Tag color="volcano">Всплеск</Tag>
-                    <b>{a.groupName}</b>: {Math.round(a.current)} сообщений за неделю против ~
-                    {Math.round(a.baseline)}/нед (×{a.ratio})
-                  </>
-                ) : (
-                  <>
-                    <Tag color="red">SLA</Tag>
-                    <b>{a.groupName}</b>: первый ответ {humanizeSeconds(a.current)} против{" "}
-                    {humanizeSeconds(a.baseline)} (×{a.ratio})
-                  </>
-                )}
-              </div>
-            ))}
+          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            {alertsReport.alerts.map((a, i) => {
+              const spike = a.type === "message_spike";
+              return (
+                <div
+                  key={i}
+                  className="anomaly"
+                  style={{ "--anomaly-accent": spike ? c.amber : c.rose } as CSSProperties}
+                >
+                  <Tag color={spike ? "volcano" : "red"} style={{ marginInlineEnd: 0 }}>
+                    {spike ? "всплеск" : "SLA"}
+                  </Tag>
+                  {spike ? (
+                    <span>
+                      <b>{a.groupName}</b>: {num(Math.round(a.current))} сообщений за неделю против{" "}
+                      {num(Math.round(a.baseline))} обычных, ×{a.ratio}
+                    </span>
+                  ) : (
+                    <span>
+                      <b>{a.groupName}</b>: первый ответ {humanizeSeconds(a.current)} против{" "}
+                      {humanizeSeconds(a.baseline)}, ×{a.ratio}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </Space>
         </Card>
       )}
 
       <Row gutter={[16, 16]}>
-        <Col xs={12} md={6}><Card><Statistic title="Сообщений" value={totals.messages} valueStyle={{ color: COLORS.messages }} /></Card></Col>
-        <Col xs={12} md={6}><Card><Statistic title="Закрытых заявок" value={totals.closed} valueStyle={{ color: COLORS.closed }} /></Card></Col>
-        <Col xs={12} md={6}><Card><Statistic title="Отклонённых" value={totals.rejected} valueStyle={{ color: COLORS.rejected }} /></Card></Col>
-        <Col xs={12} md={6}>
-          <Card
-            hoverable
-            onClick={() => setOpenTicketsShown(true)}
-            style={{ cursor: "pointer" }}
-          >
-            <Tooltip
-              title={
-                "Заявки, открытые на конец периода: не закрыты и не заброшены " +
-                "(клиент молчит дольше 20 рабочих часов). Нажмите, чтобы увидеть список." +
-                (backlogClamped ? " Период выходит за пределы данных — показано на дату последнего сообщения." : "")
-              }
-            >
-              <Statistic
-                title="Открытых на конец периода"
-                value={backlog?.openTickets ?? 0}
-                suffix={
-                  backlogClamped ? (
-                    <span style={{ fontSize: 13, color: "#8c8c8c", marginLeft: 8 }}>
-                      на {dayjs(backlog!.asOf).format("DD.MM.YYYY")}
-                    </span>
-                  ) : undefined
+        <Col xs={12} lg={6}>
+          <StatCard
+            label="Сообщений"
+            value={num(totals.messages)}
+            hint={perBucket > 0 ? `${num(perBucket)} в среднем за ${BUCKET_NOUN[bucket]}` : null}
+            icon={<MessageOutlined />}
+            accent={c.blue}
+            soft={tint(c.blue, 0.14)}
+          />
+        </Col>
+        <Col xs={12} lg={6}>
+          <StatCard
+            label="Закрыто заявок"
+            value={num(totals.closed)}
+            icon={<CheckCircleOutlined />}
+            accent={c.green}
+            soft={tint(c.green, 0.14)}
+          />
+        </Col>
+        <Col xs={12} lg={6}>
+          <StatCard
+            label="Отклонено"
+            value={num(totals.rejected)}
+            icon={<StopOutlined />}
+            accent={c.rose}
+            soft={tint(c.rose, 0.14)}
+          />
+        </Col>
+        <Col xs={12} lg={6}>
+          <Tooltip title="Не закрыты и не заброшены на конец периода. Открыть список">
+            <div>
+              <StatCard
+                label="Открытых заявок"
+                value={num(backlog?.openTickets ?? 0)}
+                hint={
+                  backlog?.asOf
+                    ? `на ${dayjs(backlog.asOf).format("DD.MM.YYYY")}${backlogClamped ? ", конец данных" : ""}`
+                    : null
                 }
-                valueStyle={{ color: COLORS.backlog }}
+                icon={<InboxOutlined />}
+                accent={c.amber}
+                soft={tint(c.amber, 0.14)}
+                onClick={() => setOpenTicketsShown(true)}
               />
-            </Tooltip>
+            </div>
+          </Tooltip>
+        </Col>
+      </Row>
+
+      <Card title="Динамика">
+        {data.length === 0 && !isFetching ? (
+          <Empty description="Нет данных за период" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <EChart option={option} loading={isFetching} height={400} />
+        )}
+      </Card>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={12}>
+          <Card
+            title="Первый ответ"
+            style={{ height: "100%" }}
+            extra={
+              overallFrt != null ? (
+                <span
+                  className="meta"
+                  title="Средневзвешенная медиан по интервалам графика, не общая медиана периода"
+                >
+                  медиана <b>{humanizeSeconds(overallFrt.median)}</b> · среднее{" "}
+                  {humanizeSeconds(overallFrt.mean)}
+                </span>
+              ) : null
+            }
+          >
+            {sla.length === 0 && !slaLoading ? (
+              <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <EChart option={slaOption} loading={slaLoading} height={300} />
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card
+            title="Время решения"
+            style={{ height: "100%" }}
+            extra={<span className="meta">рабочее время до закрытия</span>}
+          >
+            {resolution.length === 0 && !resolutionLoading ? (
+              <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <EChart option={resolutionOption} loading={resolutionLoading} height={300} />
+            )}
           </Card>
         </Col>
       </Row>
 
-      <Card title={`Динамика — ${group ?? "все группы"}`}>
-        <EChart option={option} loading={isFetching} height={420} />
-      </Card>
-
-      <Card
-        title="Время первого ответа инженера"
-        extra={
-          overallFrt != null ? (
-            <span title="Средневзвешенная медиан по интервалам графика (не общая медиана периода)">
-              Медиана (взвеш.): <b style={{ color: "#21b573" }}>{humanizeSeconds(overallFrt.median)}</b>
-              <span style={{ color: "#8c8c8c" }}> · среднее {humanizeSeconds(overallFrt.mean)}</span>
-            </span>
-          ) : null
-        }
-      >
-        <EChart option={slaOption} loading={slaLoading} height={300} />
-      </Card>
-
-      <Card
-        title="Время решения заявки"
-        extra={<span style={{ color: "#8c8c8c" }}>от открытия до «закрыта заявка», рабочее время</span>}
-      >
-        <EChart option={resolutionOption} loading={resolutionLoading} height={300} />
-      </Card>
-
       <Card
         title="Повторные обращения"
         extra={
-          <span style={{ color: "#8c8c8c" }}>
-            За период: <b>{reopenTotals.probable}</b> вероятных ({reopenTotals.rate}% от закрытых) ·{" "}
-            {reopenTotals.confirmed} подтверждённых
+          <span className="meta">
+            <b>{num(reopenTotals.probable)}</b> вероятных, {reopenTotals.rate}% от закрытых ·{" "}
+            {num(reopenTotals.confirmed)} подтверждено
           </span>
         }
       >
@@ -709,36 +767,51 @@ export default function MetricsPage() {
         )}
       </Card>
 
-      <Card
-        title="Нагрузка по часам и дням недели"
-        extra={
-          <Segmented
-            value={heatmapMode}
-            onChange={(v) => setHeatmapMode(v as "sum" | "avg")}
-            options={[
-              { label: "Сумма", value: "sum" },
-              { label: "Среднее/день", value: "avg" },
-            ]}
-          />
-        }
-      >
-        <EChart option={heatmapOption} loading={heatmapLoading} height={300} />
-      </Card>
-
-      <Card
-        title="Категории обращений"
-        extra={
-          <span style={{ color: "#8c8c8c" }}>
-            Классифицировано: <b>{categoryStats.classifiedPct}%</b> · Другое:{" "}
-            {categoryStats.other.toLocaleString("ru-RU")}
-          </span>
-        }
-      >
-        <EChart option={categoriesOption} loading={categoriesLoading} height={340} />
-      </Card>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={14}>
+          <Card
+            title="Нагрузка по часам"
+            style={{ height: "100%" }}
+            extra={
+              <Segmented
+                size="small"
+                value={heatmapMode}
+                onChange={(v) => setHeatmapMode(v as "sum" | "avg")}
+                options={[
+                  { label: "Сумма", value: "sum" },
+                  { label: "В среднем", value: "avg" },
+                ]}
+              />
+            }
+          >
+            {heatmap.length === 0 && !heatmapLoading ? (
+              <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <EChart option={heatmapOption} loading={heatmapLoading} height={320} />
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} xl={10}>
+          <Card
+            title="Категории"
+            style={{ height: "100%" }}
+            extra={
+              <span className="meta">
+                классифицировано <b>{categoryStats.classifiedPct}%</b>
+              </span>
+            }
+          >
+            {categoryStats.named.length === 0 && !categoriesLoading ? (
+              <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <EChart option={categoriesOption} loading={categoriesLoading} height={320} />
+            )}
+          </Card>
+        </Col>
+      </Row>
 
       <Modal
-        title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")} — ${group ?? "все группы"}`}
+        title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")}`}
         open={openTicketsShown}
         onCancel={() => setOpenTicketsShown(false)}
         width={1100}
@@ -772,9 +845,8 @@ export default function MetricsPage() {
           </Space>
         }
       >
-        <p style={{ color: "#8c8c8c", marginTop: 0 }}>
-          Клик по имени клиента открывает его переписку в разделе чатов (в новой вкладке),
-          начиная с даты открытия заявки.
+        <p className="meta" style={{ marginTop: 0 }}>
+          Имя клиента открывает его переписку в новой вкладке.
         </p>
         <Table
           rowKey={(t) => `${t.client}_${t.openedAt}`}
