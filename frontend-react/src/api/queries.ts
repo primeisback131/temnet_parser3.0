@@ -36,10 +36,20 @@ export function useUsers(start: string, end: string, groupName: string | null) {
   });
 }
 
-export function useChats(start: string, end: string, groupName: string | null) {
+/** One client's conversation with support; nothing is fetched until both are chosen. */
+export function useChats(start: string, end: string, groupName: string | null, user: string | null) {
   return useQuery({
-    queryKey: ["chats", start, end, groupName],
-    queryFn: () => api.getChats(start, end, groupName!),
+    queryKey: ["chats", start, end, groupName, user],
+    queryFn: () => api.getChats(start, end, groupName!, user!),
+    enabled: Boolean(groupName) && Boolean(user),
+  });
+}
+
+/** Clients of the group who talked to support in the period (the chat list). */
+export function useChatParticipants(start: string, end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["chatParticipants", start, end, groupName],
+    queryFn: () => api.getChatParticipants(start, end, groupName!),
     enabled: Boolean(groupName),
   });
 }

@@ -1,5 +1,6 @@
 package com.temnet.temnet_parser.security;
 
+import com.temnet.temnet_parser.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -12,7 +13,10 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -26,6 +30,10 @@ import org.springframework.web.cors.CorsConfigurationSource;
  * <p>
  * CSRF stays on (the session rides in a cookie): the token is published in a
  * JS-readable XSRF-TOKEN cookie and echoed back in the X-XSRF-TOKEN header.
+ * <p>
+ * The account behind a session is re-read on every request
+ * ({@link AccountRefreshFilter}), so locking, deleting or demoting a user
+ * takes effect immediately.
  */
 @Configuration
 public class SecurityConfig {
@@ -34,6 +42,16 @@ public class SecurityConfig {
         CsrfTokenRequestAttributeHandler handler = new CsrfTokenRequestAttributeHandler();
         handler.setCsrfRequestAttributeName(null);
         return handler;
+    }
+
+    /**
+     * The SPA reads the token from any page while the API lives under /api,
+     * so the cookie is published for the whole site and readable by scripts.
+     */
+    private static CookieCsrfTokenRepository csrfTokenRepository() {
+        CookieCsrfTokenRepository repository = new CookieCsrfTokenRepository();
+        repository.setCookieCustomizer(cookie -> cookie.httpOnly(false).path("/"));
+        return repository;
     }
 
     @Bean
@@ -53,14 +71,26 @@ public class SecurityConfig {
         return new ProviderManager(provider);
     }
 
+    /**
+     * One repository shared by the filter chain, the login endpoint and the
+     * per-request refresh, so all of them read and write the same session
+     * attribute.
+     */
+    @Bean
+    public SecurityContextRepository securityContextRepository() {
+        return new HttpSessionSecurityContextRepository();
+    }
+
     @Bean
     public SecurityFilterChain filterChain(
             HttpSecurity http,
-            @Qualifier("corsConfigurationSource") CorsConfigurationSource cors) throws Exception {
+            @Qualifier("corsConfigurationSource") CorsConfigurationSource cors,
+            SecurityContextRepository contextRepository,
+            UserRepository userRepository) throws Exception {
         return http
                 .cors(c -> c.configurationSource(cors))
                 .csrf(csrf -> csrf
-                        .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                        .csrfTokenRepository(csrfTokenRepository())
                         // Resolve the token eagerly: with the default deferred
                         // loading the cookie is only written once something reads
                         // the token, so an SPA would never receive one.
@@ -68,7 +98,11 @@ public class SecurityConfig {
                         // The login POST is the one request that cannot carry a
                         // token yet; it creates the session rather than acting on one.
                         .ignoringRequestMatchers("/auth/login"))
+                .securityContext(sc -> sc.securityContextRepository(contextRepository))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
+                // Runs once the session's principal is loaded and before any
+                // authorization decision, so the decision is made on live data.
+                .addFilterBefore(new AccountRefreshFilter(userRepository, contextRepository), AuthorizationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/login").permitAll()
                         .requestMatchers("/admin/**").hasRole("ADMIN")

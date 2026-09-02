@@ -104,7 +104,7 @@ public class MetricsController {
 
     @GetMapping("/alerts")
     public AlertsReport alerts() {
-        return metricsService.alerts(scope(null));
+        return metricsService.alerts(scope(null), accessControl.visibleGroups(Area.METRICS));
     }
 
     @GetMapping("/categories")

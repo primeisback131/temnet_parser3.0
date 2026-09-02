@@ -1,7 +1,33 @@
 import type { EChartsOption } from "echarts";
-import * as echarts from "echarts";
+import { BarChart, HeatmapChart, LineChart } from "echarts/charts";
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  VisualMapComponent,
+} from "echarts/components";
+import * as echarts from "echarts/core";
+import { CanvasRenderer } from "echarts/renderers";
 import { useEffect, useRef } from "react";
 import { useThemeMode } from "../theme";
+
+// Only what the dashboards use, instead of the whole library: keeps the
+// lazily loaded metrics chunk small. A new chart type or component has to be
+// registered here before it renders.
+echarts.use([
+  LineChart,
+  BarChart,
+  HeatmapChart,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+  DataZoomComponent,
+  VisualMapComponent,
+  CanvasRenderer,
+]);
+
+type Chart = ReturnType<typeof echarts.init>;
 
 interface Props {
   option: EChartsOption;
@@ -16,7 +42,7 @@ interface Props {
  */
 export default function EChart({ option, height = 380, loading = false }: Props) {
   const elementRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<echarts.ECharts | null>(null);
+  const chartRef = useRef<Chart | null>(null);
   const { mode } = useThemeMode();
 
   // Latest props for the re-init effect, so it can restore state without
@@ -29,7 +55,7 @@ export default function EChart({ option, height = 380, loading = false }: Props)
 
   // The built-in "dark" theme paints its own dark canvas; keep it transparent
   // so the chart sits on the antd Card background.
-  const applyOption = (chart: echarts.ECharts, opt: EChartsOption) =>
+  const applyOption = (chart: Chart, opt: EChartsOption) =>
     // `true` clears stale series when the shape of the option changes.
     chart.setOption({ backgroundColor: "transparent", ...opt }, true);
 

@@ -18,6 +18,12 @@ public class HelpAccountService {
         this.helpAccountRepository = helpAccountRepository;
     }
 
+    /**
+     * Desks seen in the correspondence. The query scans the whole message
+     * table, and the answer only changes when new messages arrive, so it is
+     * cached until the next sync clears it (or the TTL runs out).
+     */
+    @Cacheable("helpAccounts")
     public List<HelpAccount> listAccounts() {
         return helpAccountRepository.findAll();
     }

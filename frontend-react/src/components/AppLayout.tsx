@@ -2,6 +2,7 @@ import {
   BankOutlined,
   CustomerServiceOutlined,
   DatabaseOutlined,
+  KeyOutlined,
   LineChartOutlined,
   LogoutOutlined,
   MessageOutlined,
@@ -10,10 +11,12 @@ import {
   SunOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { Button, Layout, Menu, Space, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Layout, Menu, Modal, Space, Tag, Tooltip, Typography } from "antd";
+import { useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
+import ChangePasswordForm from "./ChangePasswordForm";
 
 const { Header, Sider, Content } = Layout;
 
@@ -22,6 +25,8 @@ export default function AppLayout() {
   const location = useLocation();
   const { mode, toggle } = useThemeMode();
   const { user, logout, canUseChats, canViewMetrics } = useAuth();
+  const { message } = App.useApp();
+  const [passwordOpen, setPasswordOpen] = useState(false);
 
   // The menu only offers what the backend would actually serve.
   const items = [
@@ -67,6 +72,14 @@ export default function AppLayout() {
               {user?.role === "admin" && <Tag color="blue">админ</Tag>}
               {user?.role === "user" && <Tag>только просмотр</Tag>}
             </Space>
+            <Tooltip title="Сменить пароль">
+              <Button
+                type="text"
+                aria-label="Сменить пароль"
+                icon={<KeyOutlined />}
+                onClick={() => setPasswordOpen(true)}
+              />
+            </Tooltip>
             <Tooltip title={mode === "dark" ? "Светлая тема" : "Тёмная тема"}>
               <Button
                 type="text"
@@ -84,6 +97,21 @@ export default function AppLayout() {
           <Outlet />
         </Content>
       </Layout>
+
+      <Modal
+        title="Смена пароля"
+        open={passwordOpen}
+        onCancel={() => setPasswordOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <ChangePasswordForm
+          onDone={() => {
+            setPasswordOpen(false);
+            message.success("Пароль изменён");
+          }}
+        />
+      </Modal>
     </Layout>
   );
 }

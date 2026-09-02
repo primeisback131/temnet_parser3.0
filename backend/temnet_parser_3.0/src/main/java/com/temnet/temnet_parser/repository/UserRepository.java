@@ -5,6 +5,7 @@ import com.temnet.temnet_parser.dto.HelpAccountScope;
 import com.temnet.temnet_parser.dto.UserAccount;
 import com.temnet.temnet_parser.security.AppPrincipal;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -19,6 +20,18 @@ import java.util.stream.Collectors;
 @Repository
 public class UserRepository {
 
+    private static final String PRINCIPAL_COLUMNS =
+            "id, username, full_name, password_hash, role, enabled, must_change_password";
+
+    private static final RowMapper<AppPrincipal> PRINCIPAL = (rs, i) -> new AppPrincipal(
+            rs.getLong("id"),
+            rs.getString("username"),
+            rs.getString("full_name"),
+            rs.getString("password_hash"),
+            rs.getString("role"),
+            rs.getBoolean("enabled"),
+            rs.getBoolean("must_change_password"));
+
     private final JdbcClient jdbcClient;
 
     public UserRepository(@Qualifier("analyticsJdbcClient") JdbcClient jdbcClient) {
@@ -26,18 +39,17 @@ public class UserRepository {
     }
 
     public Optional<AppPrincipal> findPrincipal(String username) {
-        return jdbcClient.sql("""
-                        SELECT id, username, full_name, password_hash, role, enabled
-                        FROM app_user WHERE username = :username
-                        """)
+        return jdbcClient.sql("SELECT " + PRINCIPAL_COLUMNS + " FROM app_user WHERE username = :username")
                 .param("username", username)
-                .query((rs, i) -> new AppPrincipal(
-                        rs.getLong("id"),
-                        rs.getString("username"),
-                        rs.getString("full_name"),
-                        rs.getString("password_hash"),
-                        rs.getString("role"),
-                        rs.getBoolean("enabled")))
+                .query(PRINCIPAL)
+                .optional();
+    }
+
+    /** The live state of an account — what the per-request refresh compares the session against. */
+    public Optional<AppPrincipal> findPrincipalById(long id) {
+        return jdbcClient.sql("SELECT " + PRINCIPAL_COLUMNS + " FROM app_user WHERE id = :id")
+                .param("id", id)
+                .query(PRINCIPAL)
                 .optional();
     }
 
@@ -45,9 +57,17 @@ public class UserRepository {
         return jdbcClient.sql("SELECT COUNT(*) FROM app_user").query(Long.class).single();
     }
 
+    /** Active administrators other than the given one — must never reach zero. */
+    public long countEnabledAdminsExcluding(long id) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM app_user WHERE role = 'admin' AND enabled = 1 AND id <> :id")
+                .param("id", id)
+                .query(Long.class)
+                .single();
+    }
+
     public List<UserAccount> findAll() {
         List<UserAccount> users = jdbcClient.sql("""
-                        SELECT id, username, full_name, role, enabled, created_at
+                        SELECT id, username, full_name, role, enabled, must_change_password, created_at
                         FROM app_user ORDER BY username
                         """)
                 .query((rs, i) -> new UserAccount(
@@ -56,6 +76,7 @@ public class UserRepository {
                         rs.getString("full_name"),
                         rs.getString("role"),
                         rs.getBoolean("enabled"),
+                        rs.getBoolean("must_change_password"),
                         rs.getTimestamp("created_at").toLocalDateTime(),
                         List.of()))
                 .list();
@@ -74,20 +95,22 @@ public class UserRepository {
 
         return users.stream()
                 .map(u -> new UserAccount(u.id(), u.username(), u.fullName(), u.role(), u.enabled(),
-                        u.createdAt(), grants.getOrDefault(u.id(), List.of())))
+                        u.mustChangePassword(), u.createdAt(), grants.getOrDefault(u.id(), List.of())))
                 .toList();
     }
 
-    public long create(String username, String passwordHash, String fullName, String role, boolean enabled) {
+    public long create(String username, String passwordHash, String fullName, String role, boolean enabled,
+                       boolean mustChangePassword) {
         jdbcClient.sql("""
-                        INSERT INTO app_user (username, password_hash, full_name, role, enabled)
-                        VALUES (:username, :hash, :fullName, :role, :enabled)
+                        INSERT INTO app_user (username, password_hash, full_name, role, enabled, must_change_password)
+                        VALUES (:username, :hash, :fullName, :role, :enabled, :mustChange)
                         """)
                 .param("username", username)
                 .param("hash", passwordHash)
                 .param("fullName", fullName)
                 .param("role", role)
                 .param("enabled", enabled)
+                .param("mustChange", mustChangePassword)
                 .update();
         return jdbcClient.sql("SELECT id FROM app_user WHERE username = :username")
                 .param("username", username).query(Long.class).single();
@@ -102,9 +125,12 @@ public class UserRepository {
                 .update();
     }
 
-    public void updatePassword(long id, String passwordHash) {
-        jdbcClient.sql("UPDATE app_user SET password_hash = :hash WHERE id = :id")
-                .param("hash", passwordHash).param("id", id).update();
+    public void updatePassword(long id, String passwordHash, boolean mustChangePassword) {
+        jdbcClient.sql("UPDATE app_user SET password_hash = :hash, must_change_password = :mustChange WHERE id = :id")
+                .param("hash", passwordHash)
+                .param("mustChange", mustChangePassword)
+                .param("id", id)
+                .update();
     }
 
     public void delete(long id) {

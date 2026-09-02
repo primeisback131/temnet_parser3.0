@@ -1,5 +1,22 @@
 import { FileExcelOutlined } from "@ant-design/icons";
-import { Button, Card, Col, DatePicker, Empty, Modal, Row, Segmented, Select, Space, Statistic, Table, Tag, Tooltip } from "antd";
+import {
+  App,
+  Button,
+  Card,
+  Col,
+  DatePicker,
+  Empty,
+  Modal,
+  Row,
+  Segmented,
+  Select,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { EChartsOption } from "echarts";
 import dayjs from "dayjs";
@@ -20,9 +37,11 @@ import {
 } from "../api/queries";
 import type { Bucket, OpenTicket } from "../api/types";
 import EChart from "../components/EChart";
+import QueryError from "../components/QueryError";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel, exportWorkbook } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
+import { useThemeMode } from "../theme";
 
 const { RangePicker } = DatePicker;
 
@@ -33,23 +52,36 @@ const COLORS = {
   backlog: "#ffa940",
 };
 
+/** Heatmap ramps: light cells on a light card, dark cells on a dark one. */
+const HEATMAP_RAMP = {
+  light: ["#eef3ff", "#9cc0ff", "#3e79f7", "#1e3a8a"],
+  dark: ["#1f2937", "#1e3a8a", "#3e79f7", "#9cc0ff"],
+};
+
 export default function MetricsPage() {
+  const { message } = App.useApp();
+  const { mode } = useThemeMode();
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
+  const [exporting, setExporting] = useState(false);
 
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
 
-  const { data: groups = [] } = useGroups();
-  const { data = [], isFetching } = useTimeseries(startStr, endStr, bucket, group);
-  const { data: heatmap = [], isFetching: heatmapLoading } = useHeatmap(startStr, endStr, group);
-  const { data: sla = [], isFetching: slaLoading } = useSla(startStr, endStr, bucket, group);
-  const { data: resolution = [], isFetching: resolutionLoading } = useResolution(startStr, endStr, bucket, group);
-  const { data: reopens = [], isFetching: reopensLoading } = useReopens(startStr, endStr, bucket, group);
-  const { data: alertsReport } = useAlerts();
-  const { data: backlog } = useBacklog(endStr, group);
+  const { data: groups = [], error: groupsError } = useGroups();
+  const { data = [], isFetching, error: timeseriesError } = useTimeseries(startStr, endStr, bucket, group);
+  const { data: heatmap = [], isFetching: heatmapLoading, error: heatmapError } = useHeatmap(startStr, endStr, group);
+  const { data: sla = [], isFetching: slaLoading, error: slaError } = useSla(startStr, endStr, bucket, group);
+  const {
+    data: resolution = [],
+    isFetching: resolutionLoading,
+    error: resolutionError,
+  } = useResolution(startStr, endStr, bucket, group);
+  const { data: reopens = [], isFetching: reopensLoading, error: reopensError } = useReopens(startStr, endStr, bucket, group);
+  const { data: alertsReport, error: alertsError } = useAlerts();
+  const { data: backlog, error: backlogError } = useBacklog(endStr, group);
   // The period reaches past the data: the count describes the last day with
   // messages, not the requested end.
   const backlogClamped = backlog != null && dayjs(backlog.asOf).isBefore(dayjs(endStr), "day");
@@ -133,7 +165,23 @@ export default function MetricsPage() {
       },
     },
   ];
-  const { data: categories = [], isFetching: categoriesLoading } = useCategories(startStr, endStr, group);
+  const {
+    data: categories = [],
+    isFetching: categoriesLoading,
+    error: categoriesError,
+  } = useCategories(startStr, endStr, group);
+
+  // Every widget falls back to empty data on failure; one banner says why.
+  const firstError =
+    groupsError ??
+    timeseriesError ??
+    backlogError ??
+    slaError ??
+    resolutionError ??
+    reopensError ??
+    heatmapError ??
+    categoriesError ??
+    alertsError;
 
   const categoryStats = useMemo(() => {
     const named = categories.filter((c) => c.category !== "Другое");
@@ -409,6 +457,17 @@ export default function MetricsPage() {
   }, [reopens, labelFormat]);
 
   const exportReport = async () => {
+    setExporting(true);
+    try {
+      await buildReport();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "Не удалось сформировать отчёт");
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const buildReport = async () => {
     const [companies, operators] = await Promise.all([
       api.getCompanies(startStr, endStr),
       api.getOperators(startStr, endStr, group ?? undefined),
@@ -547,7 +606,7 @@ export default function MetricsPage() {
         orient: "horizontal",
         left: "center",
         bottom: 8,
-        inRange: { color: ["#eef3ff", "#9cc0ff", "#3e79f7", "#1e3a8a"] },
+        inRange: { color: HEATMAP_RAMP[mode] },
       },
       series: [
         {
@@ -558,7 +617,7 @@ export default function MetricsPage() {
         },
       ],
     };
-  }, [heatmap, heatmapMode, weekdayCounts]);
+  }, [heatmap, heatmapMode, weekdayCounts, mode]);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -592,7 +651,7 @@ export default function MetricsPage() {
               ]}
             />
             <Tooltip title="Сводный отчёт за выбранный период: динамика, SLA, время решения, повторы, категории, операторы, компании">
-              <Button icon={<FileExcelOutlined />} onClick={exportReport}>
+              <Button icon={<FileExcelOutlined />} onClick={() => void exportReport()} loading={exporting}>
                 Отчёт
               </Button>
             </Tooltip>
@@ -600,15 +659,17 @@ export default function MetricsPage() {
         </Space>
       </Card>
 
+      <QueryError error={firstError} style={{ marginBottom: 0 }} />
+
       {alertsReport && alertsReport.alerts.length > 0 && (
         <Card
           title="Аномалии за последнюю неделю данных"
           extra={
             alertsReport.asOf ? (
-              <span style={{ color: "#8c8c8c" }}>
+              <Typography.Text type="secondary">
                 {dayjs(alertsReport.weekStart).format("DD MMM")} —{" "}
                 {dayjs(alertsReport.asOf).format("DD MMM YYYY HH:mm")}
-              </span>
+              </Typography.Text>
             ) : null
           }
         >
@@ -656,9 +717,9 @@ export default function MetricsPage() {
                 value={backlog?.openTickets ?? 0}
                 suffix={
                   backlogClamped ? (
-                    <span style={{ fontSize: 13, color: "#8c8c8c", marginLeft: 8 }}>
+                    <Typography.Text type="secondary" style={{ fontSize: 13, marginLeft: 8 }}>
                       на {dayjs(backlog!.asOf).format("DD.MM.YYYY")}
-                    </span>
+                    </Typography.Text>
                   ) : undefined
                 }
                 valueStyle={{ color: COLORS.backlog }}
@@ -677,8 +738,8 @@ export default function MetricsPage() {
         extra={
           overallFrt != null ? (
             <span title="Средневзвешенная медиан по интервалам графика (не общая медиана периода)">
-              Медиана (взвеш.): <b style={{ color: "#21b573" }}>{humanizeSeconds(overallFrt.median)}</b>
-              <span style={{ color: "#8c8c8c" }}> · среднее {humanizeSeconds(overallFrt.mean)}</span>
+              Медиана (взвеш.): <b style={{ color: COLORS.closed }}>{humanizeSeconds(overallFrt.median)}</b>
+              <Typography.Text type="secondary"> · среднее {humanizeSeconds(overallFrt.mean)}</Typography.Text>
             </span>
           ) : null
         }
@@ -688,7 +749,7 @@ export default function MetricsPage() {
 
       <Card
         title="Время решения заявки"
-        extra={<span style={{ color: "#8c8c8c" }}>от открытия до «закрыта заявка», рабочее время</span>}
+        extra={<Typography.Text type="secondary">от открытия до «закрыта заявка», рабочее время</Typography.Text>}
       >
         <EChart option={resolutionOption} loading={resolutionLoading} height={300} />
       </Card>
@@ -696,10 +757,10 @@ export default function MetricsPage() {
       <Card
         title="Повторные обращения"
         extra={
-          <span style={{ color: "#8c8c8c" }}>
+          <Typography.Text type="secondary">
             За период: <b>{reopenTotals.probable}</b> вероятных ({reopenTotals.rate}% от закрытых) ·{" "}
             {reopenTotals.confirmed} подтверждённых
-          </span>
+          </Typography.Text>
         }
       >
         {reopens.length === 0 && !reopensLoading ? (
@@ -728,10 +789,10 @@ export default function MetricsPage() {
       <Card
         title="Категории обращений"
         extra={
-          <span style={{ color: "#8c8c8c" }}>
+          <Typography.Text type="secondary">
             Классифицировано: <b>{categoryStats.classifiedPct}%</b> · Другое:{" "}
             {categoryStats.other.toLocaleString("ru-RU")}
-          </span>
+          </Typography.Text>
         }
       >
         <EChart option={categoriesOption} loading={categoriesLoading} height={340} />
@@ -772,10 +833,10 @@ export default function MetricsPage() {
           </Space>
         }
       >
-        <p style={{ color: "#8c8c8c", marginTop: 0 }}>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
           Клик по имени клиента открывает его переписку в разделе чатов (в новой вкладке),
           начиная с даты открытия заявки.
-        </p>
+        </Typography.Paragraph>
         <Table
           rowKey={(t) => `${t.client}_${t.openedAt}`}
           columns={openTicketColumns}

@@ -14,6 +14,7 @@ import {
   Table,
   Tag,
   Tooltip,
+  Typography,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
@@ -129,7 +130,7 @@ export default function AdminUsersPage() {
     if (!passwordFor) return;
     try {
       await api.setUserPassword(passwordFor.id, values.password);
-      message.success("Пароль изменён");
+      message.success("Временный пароль задан, пользователь сменит его при входе");
       setPasswordFor(null);
       passwordForm.resetFields();
     } catch (e) {
@@ -181,7 +182,16 @@ export default function AdminUsersPage() {
       {
         title: "Активен",
         dataIndex: "enabled",
-        render: (v: boolean) => (v ? <Tag color="green">да</Tag> : <Tag color="red">нет</Tag>),
+        render: (v: boolean, u) => (
+          <Space size={[4, 4]} wrap>
+            {v ? <Tag color="green">да</Tag> : <Tag color="red">нет</Tag>}
+            {u.mustChangePassword && (
+              <Tooltip title="Пользователь ещё не заменил временный пароль своим">
+                <Tag color="orange">временный пароль</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        ),
       },
       {
         title: "Создан",
@@ -196,7 +206,7 @@ export default function AdminUsersPage() {
             <Tooltip title="Изменить">
               <Button icon={<EditOutlined />} size="small" onClick={() => openDialog(u)} />
             </Tooltip>
-            <Tooltip title="Сменить пароль">
+            <Tooltip title="Выдать временный пароль">
               <Button icon={<KeyOutlined />} size="small" onClick={() => setPasswordFor(u)} />
             </Tooltip>
             <Popconfirm
@@ -296,9 +306,10 @@ export default function AdminUsersPage() {
 
   return (
     <Card>
-      <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }}>
-        <span style={{ color: "#8c8c8c" }}>
-        </span>
+      <Space style={{ marginBottom: 16, width: "100%", justifyContent: "space-between" }} wrap>
+        <Typography.Text type="secondary">
+          Пароль, заданный администратором, временный: при первом входе пользователь заменит его своим.
+        </Typography.Text>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openDialog(null)}>
           Добавить
         </Button>
@@ -328,7 +339,7 @@ export default function AdminUsersPage() {
                 </Form.Item>
                 <Form.Item
                   name="password"
-                  label="Пароль"
+                  label="Временный пароль"
                   rules={[{ required: true, min: 8, message: "Минимум 8 символов" }]}
                 >
                   <Input.Password style={{ width: 200 }} autoComplete="new-password" />
@@ -401,7 +412,7 @@ export default function AdminUsersPage() {
       </Modal>
 
       <Modal
-        title={`Смена пароля — ${passwordFor?.username ?? ""}`}
+        title={`Временный пароль — ${passwordFor?.username ?? ""}`}
         open={passwordFor !== null}
         onCancel={() => setPasswordFor(null)}
         onOk={savePassword}
@@ -412,7 +423,8 @@ export default function AdminUsersPage() {
         <Form form={passwordForm} layout="vertical">
           <Form.Item
             name="password"
-            label="Новый пароль"
+            label="Новый временный пароль"
+            extra="Действующие сессии пользователя сохранятся; при следующем входе он обязан задать свой пароль."
             rules={[{ required: true, min: 8, message: "Минимум 8 символов" }]}
           >
             <Input.Password autoComplete="new-password" />

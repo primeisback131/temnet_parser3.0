@@ -5,5 +5,14 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // Same-origin API in development: the browser talks only to :5173, so the
+    // session cookie and the CSRF token behave exactly as behind the
+    // production reverse proxy. The backend serves everything under /api.
+    proxy: {
+      "/api": {
+        target: "http://localhost:8080",
+        changeOrigin: false,
+      },
+    },
   },
 });

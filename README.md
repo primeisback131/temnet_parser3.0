@@ -8,8 +8,8 @@
 ## Документация
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — устройство кодовой базы:
-  стек, структура, аналитическая БД и синхронизация, слои бэкенда, фронтенд,
-  сборка и запуск.
+  стек, структура, аналитическая БД и синхронизация, слои бэкенда,
+  авторизация, фронтенд, сборка и запуск.
 - [docs/METRICS.md](docs/METRICS.md) — все эндпоинты и **методология расчёта**:
   что и как считается в каждой метрике (формулы, SQL-логика, нюансы).
 
@@ -18,25 +18,28 @@
 - **Backend** — Java 25 + Spring Boot 4, чистый JDBC (`JdbcClient`/`JdbcTemplate`)
   поверх MariaDB, слои controller → service → repository. Собственная
   аналитическая БД (`temnet_analytics`), которую наполняет фоновая
-  синхронизация из дампа ejabberd.
+  синхронизация из дампа ejabberd. Весь API живёт под `/api`.
 - **Frontend** — React 19 + Vite + Ant Design 5 + TanStack Query, графики на
   Apache ECharts, экспорт отчётов в Excel (ExcelJS).
 - **LLM (опционально)** — классификация спорных повторных обращений через
-  любой OpenAI-совместимый chat-completions API (бесплатные варианты —
-  Gemini free tier, Groq); пока base-url не задан, этот шаг просто выключен.
+  любой OpenAI-совместимый chat-completions API. Выключена, пока не задан
+  `LLM_BASE_URL`: включение означает передачу текстов обращений внешнему
+  сервису, это решение принимается осознанно.
 
 ## Структура
 
 ```
-backend/temnet_parser_3.0   Spring Boot приложение (порт 8080)
+backend/temnet_parser_3.0   Spring Boot приложение (порт 8080, API под /api)
   ├─ src/main/java/...       контроллеры, сервисы, репозитории, DTO (records),
-  │                          пакет analytics/ — синхронизация и тикеты
+  │                          security/ — вход, сессии, права; analytics/ —
+  │                          синхронизация и тикеты
   ├─ src/main/resources/sql  SQL-запросы метрик (вынесены из кода)
   ├─ src/main/resources/analytics  схема аналитической БД
+  ├─ src/test/java/...       юнит-тесты правил разбора и фильтров доступа
   └─ db/                     тестовая схема + сид-данные для локальной проверки
-frontend-react              React-приложение (Vite dev на порту 5173)
-run_backend.bat             запуск backend (использует JDK 25 + Gradle wrapper)
-run_frontend.bat            запуск frontend (npm install + npm run dev)
+frontend-react              React-приложение (Vite dev на порту 5173, /api проксируется на 8080)
+run_backend.bat             запуск backend (Gradle wrapper; JDK 25 скачивается сам)
+run_frontend.bat            запуск frontend (npm install + npm run dev, нужен Node 18+)
 ```
 
 ## Запуск
@@ -48,35 +51,77 @@ run_frontend.bat            запуск frontend (npm install + npm run dev)
 run_backend.bat
 ```
 
+Для запуска Gradle достаточно любого JDK 17+; JDK 25 для самого проекта
+Gradle скачает сам (foojay-resolver в `settings.gradle`). При первом старте
+создаётся администратор `admin`: пароль берётся из `APP_ADMIN_PASSWORD`, иначе
+генерируется и печатается в лог. Сгенерированный пароль временный — при первом
+входе его попросят сменить.
+
+**Frontend** (Node 18+):
+
+```bat
+run_frontend.bat
+```
+
+Открыть <http://localhost:5173>. Dev-сервер проксирует `/api` на бэкенд, так
+что фронт и API работают с одного origin — cookie сессии и CSRF не требуют
+кросс-доменных настроек. В продакшене ту же роль играет reverse proxy:
+статика из `frontend-react/dist`, `/api/*` — на Spring Boot.
+
 Настройки через переменные окружения (все опциональны):
 
 | Переменная | Что задаёт | По умолчанию |
 | ---------- | ---------- | ------------ |
 | `DB_URL`, `DB_USER`, `DB_PASSWORD` | подключение к дампу ejabberd | `localhost:3306/ejabberd`, `root:root` |
 | `ANALYTICS_DB_URL`, `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | аналитическая БД | `localhost:3306/temnet_analytics`, `root:root` |
+| `DB_POOL_SIZE`, `ANALYTICS_DB_POOL_SIZE` | размеры пулов соединений (дамп читает только синхронизация, аналитика обслуживает все запросы) | 4 / 16 |
+| `API_CONTEXT_PATH` | префикс API | `/api` |
+| `SESSION_TIMEOUT`, `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_SAMESITE` | время жизни сессии и флаги cookie (за HTTPS — `SESSION_COOKIE_SECURE=true`) | 30 мин / `false` / `lax` |
+| `FORWARD_HEADERS_STRATEGY` | доверять ли `X-Forwarded-*` от reverse proxy (`native`), чтобы лимитер входа видел реальные IP | `none` |
+| `AUTH_MAX_FAILURES_PER_USER`, `AUTH_MAX_FAILURES_PER_IP`, `AUTH_LOCKOUT` | защита входа от перебора: лимит неудачных попыток на логин и на адрес за окно | 10 / 50 / 15 мин |
+| `APP_ADMIN_PASSWORD` | пароль первого администратора (только на пустой базе) | пусто — генерируется в лог |
 | `SYNC_INTERVAL`, `SYNC_INITIAL_DELAY` | периодичность синхронизации | 5 мин / 30 сек |
-| `LLM_BASE_URL` | OpenAI-совместимый endpoint для LLM-классификации reopen'ов (например `https://generativelanguage.googleapis.com/v1beta/openai`) | пусто (выключено) |
-| `LLM_API_KEY` | ключ провайдера (Gemini — с aistudio.google.com, без карты) | пусто |
-| `LLM_MODEL`, `LLM_MAX_PER_SYNC`, `LLM_RPM` | модель, лимит вызовов за один sync, темп запросов | `gemini-flash-latest`, 20, 5/мин |
-| `CORS_ORIGIN` | адрес фронтенда | `http://localhost:5173` |
+| `SOURCE_TZ`, `BUSINESS_TZ` | часовой пояс дампа и пояс рабочего дня (например `UTC` и `Europe/Moscow`); задаются вместе, после смены нужна пересборка | пусто — время берётся как есть |
+| `OPERATOR_PREFIX` | префикс аккаунтов поддержки | `help` |
+| `LLM_BASE_URL` | OpenAI-совместимый endpoint (например `https://api.groq.com/openai/v1` или `https://generativelanguage.googleapis.com/v1beta/openai`) | пусто (выключено) |
+| `LLM_API_KEY`, `LLM_MODEL`, `LLM_MAX_PER_SYNC`, `LLM_RPM`, `LLM_PROXY` | ключ, модель, лимит вызовов за один sync, темп запросов, HTTP-прокси | пусто, `meta-llama/llama-4-scout-17b-16e-instruct`, 60, 20/мин, пусто |
+| `CORS_ORIGIN` | origin фронтенда, только если он не проксируется через тот же хост | пусто (только same-origin) |
+| `METRICS_CACHE_TTL` | TTL кэша ответов метрик | 10 мин |
 
-**Frontend:**
+## Роли и доступ
 
-```bat
-run_frontend.bat
-```
-Адрес API задаётся в `frontend-react/.env` (`VITE_API_BASE`).
+- `admin` — всё, включая учётки и обслуживание; `manager` — метрики, чаты и
+  отчёт по участку в рамках выданных доступов; `user` — только таблицы
+  статистики компаний и пользователей.
+- Доступы выдаются на **участки** (help-аккаунты, фильтруют данные по самому
+  участку) и на **отдельные группы** (вся организация), отдельно для метрик и
+  для чатов.
+- Учётка перечитывается из базы на каждом запросе: отключение, удаление или
+  смена роли действуют немедленно. Последнего администратора удалить или
+  лишить прав нельзя, свою учётку удалить нельзя.
+- Пароль, заданный администратором, временный: пользователь обязан сменить
+  его при следующем входе. Сменить пароль самому можно по кнопке с ключом в
+  шапке.
 
 ## API
 
+Все пути — под `/api`. Кроме `POST /api/auth/login`, всё требует сессии;
+изменяющие запросы несут заголовок `X-XSRF-TOKEN` из cookie `XSRF-TOKEN`.
+
 | Метод | Путь | Назначение |
 | ----- | ---- | ---------- |
-| GET | `/groups` | список групп |
+| POST | `/auth/login`, `/auth/logout` | вход / выход |
+| GET | `/auth/me` | кто я и что мне доступно |
+| POST | `/auth/password` | смена собственного пароля (нужен текущий) |
+| GET | `/groups?area=metrics\|chats` | список групп, доступных в области |
 | GET | `/companies?start&end` | статистика по группам |
-| GET | `/users?start&end&groupName` | статистика по пользователям |
-| GET | `/chat?start&end&groupName` | история переписки клиентов группы |
-| GET | `/chat/chatlist?start&end&groupName` | участники переписки |
-| GET | `/metrics/timeseries?start&end&bucket&groupName?` | динамика сообщений/заявок |
+| GET | `/users?start&end&groupName` | статистика по пользователям группы |
+| GET | `/chat?start&end&groupName&user?` | переписка группы или одного клиента |
+| GET | `/chat/chatlist?start&end&groupName` | клиенты группы, писавшие в поддержку за период |
+| GET | `/help-accounts` | участки, доступные для отчёта |
+| GET | `/help-accounts/report?start&end&account` | отчёт по участку (все метрики по его группам) |
+| GET | `/metrics/timeseries?start&end&bucket&groupName?` | динамика сообщений/заявок и открытых на конец |
+| GET | `/metrics/backlog?end&groupName?`, `/metrics/backlog/tickets` | открытые на конец периода: число и сами заявки |
 | GET | `/metrics/heatmap?start&end&groupName?` | нагрузка по часам × дням недели |
 | GET | `/metrics/sla?start&end&bucket&groupName?` | время первого ответа оператора |
 | GET | `/metrics/resolution?start&end&bucket&groupName?` | время решения заявок |
@@ -84,11 +129,20 @@ run_frontend.bat
 | GET | `/metrics/alerts` | аномалии за последнюю неделю |
 | GET | `/metrics/categories?start&end&groupName?` | категории заявок |
 | GET | `/metrics/operators?start&end&groupName?` | лидерборд операторов |
+| GET/POST/PUT/DELETE | `/admin/users…` | учётки и доступы (администратор) |
 | POST | `/admin/sync` | инкрементальная синхронизация вручную (запуск, ответ сразу) |
-| POST | `/admin/sync/rebuild` | полный пересбор аналитической БД (запуск, ответ сразу) |
+| POST | `/admin/sync/rebuild` | полная пересборка аналитической БД в теневых таблицах (запуск, ответ сразу) |
 | GET | `/admin/sync/status` | состояние синхронизации, ход текущего запуска и счётчики |
 
-Оба POST-а асинхронные: пересбор идёт минуты, поэтому они возвращают начальное
-состояние запуска, а ход дела опрашивается через `/admin/sync/status` (поле
-`run`). Пока запуск не завершён, второй возвращает `409`. В интерфейсе всё это
-доступно администратору на странице **Обслуживание**.
+Оба POST-а синхронизации асинхронные: пересборка идёт минуты, поэтому они
+возвращают начальное состояние запуска, а ход дела опрашивается через
+`/admin/sync/status` (поле `run`). Пока запуск не завершён, второй возвращает
+`409`. Пересборка собирает данные в теневых таблицах и подменяет рабочие одним
+атомарным переименованием, так что метрики всё это время показывают прежние
+данные. В интерфейсе всё это доступно администратору на странице
+**Обслуживание**.
+
+Ошибки API приходят в едином виде `{"message": "..."}` со статусом по смыслу:
+400 — неверные параметры, 401 — нет сессии, 403 — нет прав, 409 — конфликт
+(дубликат логина, уже идущая синхронизация), 429 — превышен лимит попыток
+входа.

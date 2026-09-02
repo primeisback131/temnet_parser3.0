@@ -11,35 +11,48 @@ import {
   Space,
   Spin,
   Typography,
+  theme,
 } from "antd";
 import dayjs from "dayjs";
 import { useEffect, useRef, useState } from "react";
-import { api, ConflictError } from "../api/client";
+import { api } from "../api/client";
 import { useSyncStatus } from "../api/queries";
 import type { SyncRun } from "../api/types";
+import QueryError from "../components/QueryError";
 
 /** Typing this word is what arms the rebuild button — it is not undoable. */
 const CONFIRM_WORD = "ПЕРЕСОБРАТЬ";
 
 const KIND_LABEL: Record<SyncRun["kind"], string> = {
-  scheduled: "по расписанию",
+  scheduled: "синхронизация по расписанию",
   incremental: "инкрементальная синхронизация",
   rebuild: "полная пересборка",
 };
 
 function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000);
+  const seconds = Math.max(0, Math.round(ms / 1000));
   if (seconds < 60) return `${seconds} с`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes} мин ${String(seconds % 60).padStart(2, "0")} с`;
+}
+
+/** "каждые 5 минут" / "каждые 30 секунд" / "каждый час", from the configured interval. */
+function formatInterval(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const h = seconds / 3600;
+    return h === 1 ? "каждый час" : `каждые ${h} ч`;
+  }
+  if (seconds % 60 === 0) return `каждые ${seconds / 60} мин`;
+  return `каждые ${seconds} с`;
 }
 
 const num = (n: number) => n.toLocaleString("ru-RU");
 
 export default function MaintenancePage() {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const queryClient = useQueryClient();
-  const { data: status, isLoading, refetch } = useSyncStatus();
+  const { data: status, isLoading, error, refetch } = useSyncStatus();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmWord, setConfirmWord] = useState("");
   const [starting, setStarting] = useState(false);
@@ -76,13 +89,7 @@ export default function MaintenancePage() {
       message.info(rebuild ? "Пересборка запущена" : "Синхронизация запущена");
       await refetch();
     } catch (e) {
-      message.error(
-        e instanceof ConflictError
-          ? e.message
-          : e instanceof Error
-            ? e.message
-            : "Не удалось запустить",
-      );
+      message.error(e instanceof Error ? e.message : "Не удалось запустить");
       await refetch();
     } finally {
       setStarting(false);
@@ -90,6 +97,7 @@ export default function MaintenancePage() {
   };
 
   const elapsed = run ? formatDuration(now - dayjs(run.startedAt).valueOf()) : "";
+  const interval = status ? formatInterval(status.syncIntervalSeconds) : "по расписанию";
 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -107,6 +115,7 @@ export default function MaintenancePage() {
         }
         loading={isLoading}
       >
+        <QueryError error={error} />
         <Descriptions column={{ xs: 1, sm: 2, lg: 3 }} size="small">
           <Descriptions.Item label="Последняя синхронизация">
             {status?.last_run_at ? dayjs(status.last_run_at).format("DD.MM.YYYY HH:mm:ss") : "—"}
@@ -127,9 +136,9 @@ export default function MaintenancePage() {
           icon={<Spin size="small" />}
           message={`Идёт ${KIND_LABEL[run.kind]} — ${elapsed}`}
           description={
-            <>
-              Запустил: {run.startedBy}. Идет пересборка. Страницу можно закрыть.
-            </>
+            run.kind === "rebuild"
+              ? `Запустил: ${run.startedBy}. Данные собираются заново в теневых таблицах; метрики и чаты до конца пересборки показывают прежние данные. Страницу можно закрыть.`
+              : `Запустил: ${run.startedBy}. Из дампа забираются новые сообщения. Страницу можно закрыть.`
           }
         />
       )}
@@ -162,7 +171,7 @@ export default function MaintenancePage() {
       <Card title="Обслуживание">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Синхронизация идёт сама каждые 5 минут и забирает из дампа только новые сообщения.
+            Синхронизация идёт сама {interval} и забирает из дампа только новые сообщения.
             Запускать вручную нужно только сразу после того, как залит свежий дамп.
           </Typography.Paragraph>
           <Space wrap>
@@ -186,8 +195,8 @@ export default function MaintenancePage() {
             description={
               <>
                 Только когда изменились правила разбора: категории, правила классификации заявок, окна
-                истечения и повторных обращений. Пересборка перечитывает весь дамп заново и
-                применяет к нему текущий код - без неё старые заявки останутся посчитанными по
+                истечения и повторных обращений, часовые пояса. Пересборка перечитывает весь дамп заново и
+                применяет к нему текущий код — без неё старые заявки останутся посчитанными по
                 старым правилам.
               </>
             }
@@ -198,7 +207,7 @@ export default function MaintenancePage() {
       <Modal
         title={
           <Space>
-            <WarningOutlined style={{ color: "#cf1322" }} />
+            <WarningOutlined style={{ color: token.colorError }} />
             Полная пересборка базы аналитики
           </Space>
         }
@@ -224,11 +233,12 @@ export default function MaintenancePage() {
             message="Действие необратимо"
             description={
               <ul style={{ margin: 0, paddingLeft: 18 }}>
-                <li>таблицы сообщений и заявок очищаются полностью;</li>
-                <li>весь дамп читается заново - это занимает несколько минут;</li>
+                <li>весь дамп читается заново — это занимает несколько минут;</li>
                 <li>
-                  пока идёт пересборка, метрики и чаты показывают неполные данные;
-                </li>           
+                  заявки и сообщения собираются в теневых таблицах и подменяют текущие одним махом —
+                  до этого момента метрики показывают прежние данные;
+                </li>
+                <li>вердикты LLM сохраняются, повторно они не запрашиваются.</li>
               </ul>
             }
           />

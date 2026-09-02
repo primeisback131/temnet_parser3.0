@@ -88,17 +88,19 @@ public class MetricsService {
 
     /**
      * Anomalies across groups. The underlying query cannot be scoped cheaply,
-     * so the report is filtered afterwards — a manager never sees a group they
-     * were not granted.
+     * so the report is filtered afterwards to the groups the caller may see
+     * at all — the resolved list, in which a granted desk has expanded to the
+     * organizations it serves. (Filtering on the raw group grants alone left
+     * a manager granted only a desk with an always-empty report.)
      */
     @Cacheable("alerts")
-    public AlertsReport alerts(Scope scope) {
+    public AlertsReport alerts(Scope scope, List<String> visibleGroups) {
         AlertsReport report = metricsRepository.alerts();
         if (scope.unrestricted()) {
             return report;
         }
         List<Alert> visible = report.alerts().stream()
-                .filter(a -> scope.groups().contains(a.groupName()))
+                .filter(a -> visibleGroups.contains(a.groupName()))
                 .toList();
         return new AlertsReport(report.asOf(), report.weekStart(), visible);
     }

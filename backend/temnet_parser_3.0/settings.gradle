@@ -1,1 +1,7 @@
+// Auto-provisions the JDK required by the toolchain in build.gradle (JDK 25)
+// when it is not installed locally, so a fresh machine and CI build the same way.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 rootProject.name = 'temnet_parser'
