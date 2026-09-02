@@ -4,6 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth";
 import AppLayout from "./components/AppLayout";
 import AdminUsersPage from "./pages/AdminUsersPage";
+import ChangePasswordPage from "./pages/ChangePasswordPage";
 import ChatPage from "./pages/ChatPage";
 import CompaniesPage from "./pages/CompaniesPage";
 import LoginPage from "./pages/LoginPage";
@@ -24,6 +25,11 @@ export default function App() {
   }
   if (!user) {
     return <LoginPage />;
+  }
+  // A temporary password has to be replaced first; the backend refuses every
+  // other call anyway, so there is nothing else to show.
+  if (user.mustChangePassword) {
+    return <ChangePasswordPage />;
   }
 
   const isAdmin = user.role === "admin";

@@ -3,6 +3,7 @@ package com.temnet.temnet_parser.controller;
 import com.temnet.temnet_parser.dto.Grant;
 import com.temnet.temnet_parser.dto.HelpAccountScope;
 import com.temnet.temnet_parser.dto.UserAccount;
+import com.temnet.temnet_parser.security.AccessControlService;
 import com.temnet.temnet_parser.service.UserService;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,9 +32,11 @@ public class UserAdminController {
     }
 
     private final UserService userService;
+    private final AccessControlService accessControl;
 
-    public UserAdminController(UserService userService) {
+    public UserAdminController(UserService userService, AccessControlService accessControl) {
         this.userService = userService;
+        this.accessControl = accessControl;
     }
 
     @GetMapping
@@ -47,6 +50,7 @@ public class UserAdminController {
         return userService.allHelpAccounts();
     }
 
+    /** The password given here is temporary: the user replaces it at first login. */
     @PostMapping
     public long create(@RequestBody CreateRequest body) {
         return userService.create(body.username(), body.password(), body.fullName(), body.role(),
@@ -61,6 +65,7 @@ public class UserAdminController {
                 body.grants() == null ? List.of() : body.grants());
     }
 
+    /** Issues a temporary password; the user has to choose their own at next login. */
     @PutMapping("/{id}/password")
     public void changePassword(@PathVariable long id, @RequestBody PasswordRequest body) {
         userService.changePassword(id, body.password());
@@ -68,6 +73,6 @@ public class UserAdminController {
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable long id) {
-        userService.delete(id);
+        userService.delete(id, accessControl.currentUser().id());
     }
 }

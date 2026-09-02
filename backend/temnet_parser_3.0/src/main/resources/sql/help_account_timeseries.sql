@@ -1,6 +1,6 @@
 -- Daily dynamics per group for one help account: messages exchanged with the
--- account, and closures of tickets of the clients it serves (closed/rejected
--- bucketed by closing date, like timeseries.sql).
+-- account, and closures of the tickets it handled (closed/rejected bucketed
+-- by closing date, like timeseries.sql).
 SELECT
     group_name,
     bucket,
@@ -22,14 +22,8 @@ FROM (
     FROM ticket t
     JOIN client_group cg
       ON cg.client = t.client AND cg.grp NOT LIKE 'help%' AND cg.grp != 'all'
-    JOIN (
-        SELECT DISTINCT client
-        FROM message
-        WHERE created_at >= :start AND created_at < :endExclusive
-          AND ((direction = 'out' AND author = :account)
-            OR (direction = 'in' AND recipient = :account))
-    ) AS ac ON ac.client = t.client
-    WHERE t.closed_at >= :start AND t.closed_at < :endExclusive
+    WHERE t.account = :account
+      AND t.closed_at >= :start AND t.closed_at < :endExclusive
     GROUP BY 1, 2
 ) AS parts
 GROUP BY group_name, bucket

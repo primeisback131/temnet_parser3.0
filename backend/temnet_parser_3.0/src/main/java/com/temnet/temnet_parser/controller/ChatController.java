@@ -12,8 +12,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import static org.springframework.format.annotation.DateTimeFormat.ISO;
 
@@ -32,21 +30,24 @@ public class ChatController {
     /**
      * Reading correspondence needs the CHATS grant — being allowed to see a
      * group's numbers does not imply being allowed to read its messages.
+     * {@code user} limits the answer to one client's conversation; without it
+     * the whole group's correspondence is returned (the Excel export).
      */
     @GetMapping
     public List<ChatMessage> getHistory(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam String groupName) {
-        return chatService.history(start, end, accessControl.scope(groupName, Area.CHATS));
+            @RequestParam String groupName,
+            @RequestParam(required = false) String user) {
+        return chatService.history(start, end, accessControl.scope(groupName, Area.CHATS), user);
     }
 
+    /** Clients of the group who talked to support in the period, sorted. */
     @GetMapping("/chatlist")
-    public Map<String, Set<String>> getParticipants(
+    public List<String> getParticipants(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam String groupName) {
-        return Map.of("results",
-                chatService.participants(start, end, accessControl.scope(groupName, Area.CHATS)));
+        return chatService.participants(start, end, accessControl.scope(groupName, Area.CHATS));
     }
 }

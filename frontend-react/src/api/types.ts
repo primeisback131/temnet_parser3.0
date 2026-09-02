@@ -10,6 +10,8 @@ export interface CurrentUser {
   username: string;
   fullName: string | null;
   role: Role;
+  /** A temporary password is still in place: nothing but changing it is allowed. */
+  mustChangePassword: boolean;
   unrestricted: boolean; // administrator: every group, present and future
   metricsGroups: string[];
   chatGroups: string[];
@@ -36,6 +38,8 @@ export interface UserAccount {
   fullName: string | null;
   role: Role;
   enabled: boolean;
+  /** The user has not yet replaced the temporary password an administrator issued. */
+  mustChangePassword: boolean;
   createdAt: string;
   grants: Grant[];
 }
@@ -138,8 +142,12 @@ export interface UserStat {
 }
 
 export interface ChatMessage {
+  /** The client side of the conversation, whoever wrote this message. */
+  client: string;
   sender: string;
   recipient: string;
+  /** `in` — the client wrote, `out` — support answered. Decides the bubble side. */
+  direction: "in" | "out";
   message: string;
   createdAt: string;
 }
@@ -260,5 +268,7 @@ export interface SyncStatus {
   tickets: { status: string; count: number }[];
   reopens: number;
   reopenLlm: { verdict: string; count: number }[];
+  /** The configured cadence of the scheduled sync. */
+  syncIntervalSeconds: number;
   run: SyncRun | null;
 }

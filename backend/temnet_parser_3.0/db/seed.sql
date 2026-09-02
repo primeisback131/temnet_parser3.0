@@ -1,53 +1,91 @@
--- Test fixtures exercising every branch of the reporting queries.
+-- Test fixtures exercising the ingest and every report on a tiny dump.
 --
--- Two data shapes, matching the two query models:
---   1) Group members (sr_user = operators) send request-status phrases to
---      clients  -> drives /companies and /users aggregations.
---   2) A group client <-> "help" conversation -> drives /chat history and the
---      metric queries (SLA, categories, operators).
+-- Two help desks (`help` serves CompanyA and CompanyB, `help-mag` serves
+-- CompanyB only), three clients, and conversations that walk the ticket
+-- state machine through every state: open -> in progress -> closed, an
+-- acknowledgement after a closure, a reopen with a marker word, a rejection,
+-- a ticket expiring by silence, a singleton row without its MAM twin, a
+-- service row and a client<->client message that must be dropped, and an old
+-- conversation outside the reporting year.
+--
+-- Every message is written MAM-style, twice: the sender's copy first (bare
+-- peer), then the recipient's copy (sender's full jid with a /resource) a
+-- few microseconds later. Both carry the same stanza id in `xml`, encoded as
+-- ejabberd does it: bytes 0B 06, a length byte, the id. All ids here are 5
+-- characters long, hence the constant '0B0605' prefix.
 
 USE ejabberd;
 
--- Groups: two real companies, plus a help-desk group and "all" that the
--- queries must exclude (name LIKE 'help%' / name = 'all').
-INSERT INTO sr_group (name) VALUES
-    ('CompanyA'),
-    ('CompanyB'),
-    ('help-desk'),
-    ('all');
+INSERT INTO sr_group (name, opts) VALUES
+    ('CompanyA',     '[{displayed_groups,[<<"help-desk">>]}]'),
+    ('CompanyB',     '[{displayed_groups,[<<"help-desk">>,<<"help-magistr">>]}]'),
+    ('help-desk',    '[{displayed_groups,[<<"CompanyA">>,<<"CompanyB">>]},{label,"Help desk"}]'),
+    ('help-magistr', '[{displayed_groups,[<<"CompanyB">>]},{label,"Magistr desk"}]'),
+    ('all',          '[{all_users,true}]');
 
--- Operators that belong to the companies, plus a client (petrov) whose
--- help conversation below must show up under CompanyA in /chat.
 INSERT INTO sr_user (jid, grp) VALUES
-    ('alice@xmpp',  'CompanyA'),
-    ('bob@xmpp',    'CompanyA'),
-    ('carol@xmpp',  'CompanyB'),
-    ('petrov@xmpp', 'CompanyA');
+    ('petrov@xmpp',   'CompanyA'),
+    ('ivanov@xmpp',   'CompanyA'),
+    ('sidorov@xmpp',  'CompanyB'),
+    ('petrov@xmpp',   'all'),
+    ('ivanov@xmpp',   'all'),
+    ('sidorov@xmpp',  'all'),
+    ('help@xmpp',     'help-desk'),
+    ('help-mag@xmpp', 'help-magistr');
 
--- (1) Operator -> client messages with the status phrases the reports count.
-INSERT INTO archive (username, peer, bare_peer, txt, created_at) VALUES
-    -- alice (CompanyA): 4 messages in 2025
-    ('alice', 'client1@xmpp', 'client1@xmpp', 'Здравствуйте, чем помочь', '2025-03-01 10:00:00'),
-    ('alice', 'client1@xmpp', 'client1@xmpp', 'закрыта заявка №1',        '2025-03-01 10:05:00'),
-    ('alice', 'client2@xmpp', 'client2@xmpp', 'заявка в работе',          '2025-03-02 09:00:00'),
-    ('alice', 'client3@xmpp', 'client3@xmpp', 'отклонена заявка №2',      '2025-03-03 12:00:00'),
-    -- bob (CompanyA): 2 messages
-    ('bob',   'client4@xmpp', 'client4@xmpp', 'добрый день',              '2025-04-01 08:00:00'),
-    ('bob',   'client4@xmpp', 'client4@xmpp', 'заявка закрыта успешно',   '2025-04-01 08:10:00'),
-    -- carol (CompanyB): 2 messages
-    ('carol', 'client5@xmpp', 'client5@xmpp', 'слушаю вас',               '2025-05-01 11:00:00'),
-    ('carol', 'client5@xmpp', 'client5@xmpp', 'заявка закрыта',           '2025-05-01 11:05:00'),
-    -- out of the 2025 range -> must be ignored by date filter
-    ('alice', 'client1@xmpp', 'client1@xmpp', 'старое сообщение',         '2024-01-15 09:00:00');
+-- (username, peer, bare_peer, txt, created_at, timestamp in microseconds, xml with the stanza id)
+INSERT INTO archive (username, peer, bare_peer, txt, created_at, timestamp, xml) VALUES
+    -- An old conversation (2024): outside every 2025 report, but it seeds
+    -- petrov's "last closed" state.
+    ('petrov', 'help@xmpp',          'help@xmpp',   'старое сообщение', '2024-01-15 09:00:00', UNIX_TIMESTAMP('2024-01-15 09:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0001')))),
+    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'старое сообщение', '2024-01-15 09:00:00', UNIX_TIMESTAMP('2024-01-15 09:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0001')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'закрыта заявка',   '2024-01-15 09:30:00', UNIX_TIMESTAMP('2024-01-15 09:30:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0002')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'закрыта заявка',   '2024-01-15 09:30:00', UNIX_TIMESTAMP('2024-01-15 09:30:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0002')))),
 
--- (2) A client <-> help conversation for /chat and the metric queries.
--- Stored MAM-style, twice per message: the sender's copy has a bare `peer`,
--- the recipient's copy carries the sender's full jid with a /resource. The
--- dedup logic must collapse each pair into one message.
-INSERT INTO archive (username, peer, bare_peer, txt, created_at) VALUES
-    ('petrov', 'help@xmpp',          'help@xmpp',   'Здравствуйте, не работает интернет', '2025-06-01 10:00:00'),
-    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'Здравствуйте, не работает интернет', '2025-06-01 10:00:00'),
-    ('help',   'petrov@xmpp',        'petrov@xmpp', 'Принято, проверяем',                 '2025-06-01 10:01:00'),
-    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'Принято, проверяем',                 '2025-06-01 10:01:00'),
-    ('petrov', 'help@xmpp',          'help@xmpp',   'Спасибо',                            '2025-06-01 10:05:00'),
-    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'Спасибо',                            '2025-06-01 10:05:00');
+    -- Mon 2025-06-02, petrov <-> help: open -> in progress -> closed (FRT 3 min,
+    -- resolution 40 working minutes), then an acknowledgement, then a reopen
+    -- with a marker word inside the reopen window, closed again.
+    ('petrov', 'help@xmpp',          'help@xmpp',   'Здравствуйте, не работает принтер на 2 этаже', '2025-06-02 10:00:00', UNIX_TIMESTAMP('2025-06-02 10:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0101')))),
+    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'Здравствуйте, не работает принтер на 2 этаже', '2025-06-02 10:00:00', UNIX_TIMESTAMP('2025-06-02 10:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0101')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'Принято, заявка в работе',                     '2025-06-02 10:03:00', UNIX_TIMESTAMP('2025-06-02 10:03:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0102')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'Принято, заявка в работе',                     '2025-06-02 10:03:00', UNIX_TIMESTAMP('2025-06-02 10:03:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0102')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'Закрыта заявка',                               '2025-06-02 10:40:00', UNIX_TIMESTAMP('2025-06-02 10:40:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0103')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'Закрыта заявка',                               '2025-06-02 10:40:00', UNIX_TIMESTAMP('2025-06-02 10:40:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0103')))),
+    ('petrov', 'help@xmpp',          'help@xmpp',   'Спасибо!',                                     '2025-06-02 10:45:00', UNIX_TIMESTAMP('2025-06-02 10:45:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0104')))),
+    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'Спасибо!',                                     '2025-06-02 10:45:00', UNIX_TIMESTAMP('2025-06-02 10:45:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0104')))),
+    ('petrov', 'help@xmpp',          'help@xmpp',   'опять не печатает',                            '2025-06-02 11:30:00', UNIX_TIMESTAMP('2025-06-02 11:30:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0105')))),
+    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'опять не печатает',                            '2025-06-02 11:30:00', UNIX_TIMESTAMP('2025-06-02 11:30:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0105')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'Проверяем',                                    '2025-06-02 11:35:00', UNIX_TIMESTAMP('2025-06-02 11:35:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0106')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'Проверяем',                                    '2025-06-02 11:35:00', UNIX_TIMESTAMP('2025-06-02 11:35:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0106')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'заявка закрыта',                               '2025-06-02 12:00:00', UNIX_TIMESTAMP('2025-06-02 12:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0107')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'заявка закрыта',                               '2025-06-02 12:00:00', UNIX_TIMESTAMP('2025-06-02 12:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0107')))),
+
+    -- Tue 2025-06-03, ivanov <-> help: rejected.
+    ('ivanov', 'help@xmpp',          'help@xmpp',   'не могу зайти в 1С, пишет неверный пароль', '2025-06-03 09:00:00', UNIX_TIMESTAMP('2025-06-03 09:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0201')))),
+    ('help',   'ivanov@xmpp/pc',     'ivanov@xmpp', 'не могу зайти в 1С, пишет неверный пароль', '2025-06-03 09:00:00', UNIX_TIMESTAMP('2025-06-03 09:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0201')))),
+    ('help',   'ivanov@xmpp',        'ivanov@xmpp', 'Отклонена заявка, обратитесь к бухгалтеру',  '2025-06-03 09:20:00', UNIX_TIMESTAMP('2025-06-03 09:20:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0202')))),
+    ('ivanov', 'help@xmpp/desk',     'help@xmpp',   'Отклонена заявка, обратитесь к бухгалтеру',  '2025-06-03 09:20:00', UNIX_TIMESTAMP('2025-06-03 09:20:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0202')))),
+
+    -- Wed 2025-06-04, sidorov <-> help-mag: never closed; expires by silence
+    -- when sidorov writes again the following Monday (a new ticket, closed).
+    ('sidorov',  'help-mag@xmpp',        'help-mag@xmpp', 'не работает интернет',              '2025-06-04 14:00:00', UNIX_TIMESTAMP('2025-06-04 14:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0301')))),
+    ('help-mag', 'sidorov@xmpp/pc',      'sidorov@xmpp',  'не работает интернет',              '2025-06-04 14:00:00', UNIX_TIMESTAMP('2025-06-04 14:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0301')))),
+    ('help-mag', 'sidorov@xmpp',         'sidorov@xmpp',  'Смотрим',                           '2025-06-04 14:05:00', UNIX_TIMESTAMP('2025-06-04 14:05:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0302')))),
+    ('sidorov',  'help-mag@xmpp/desk',   'help-mag@xmpp', 'Смотрим',                           '2025-06-04 14:05:00', UNIX_TIMESTAMP('2025-06-04 14:05:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0302')))),
+    ('sidorov',  'help-mag@xmpp',        'help-mag@xmpp', 'добрый день, нужен доступ к папке', '2025-06-09 09:00:00', UNIX_TIMESTAMP('2025-06-09 09:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0303')))),
+    ('help-mag', 'sidorov@xmpp/pc',      'sidorov@xmpp',  'добрый день, нужен доступ к папке', '2025-06-09 09:00:00', UNIX_TIMESTAMP('2025-06-09 09:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0303')))),
+    ('help-mag', 'sidorov@xmpp',         'sidorov@xmpp',  'закрыта заявка',                    '2025-06-09 09:10:00', UNIX_TIMESTAMP('2025-06-09 09:10:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0304')))),
+    ('sidorov',  'help-mag@xmpp/desk',   'help-mag@xmpp', 'закрыта заявка',                    '2025-06-09 09:10:00', UNIX_TIMESTAMP('2025-06-09 09:10:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0304')))),
+
+    -- Thu 2025-06-05, petrov <-> help: the client's message survives only as
+    -- the recipient's copy (no twin) — the resource heuristic must still
+    -- attribute it to petrov. Closed by a normal pair.
+    ('help',   'petrov@xmpp/mobile', 'petrov@xmpp', 'проверьте пожалуйста почту, письма не приходят', '2025-06-05 15:00:00', UNIX_TIMESTAMP('2025-06-05 15:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0401')))),
+    ('help',   'petrov@xmpp',        'petrov@xmpp', 'закрыта заявка',                                 '2025-06-05 15:30:00', UNIX_TIMESTAMP('2025-06-05 15:30:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0402')))),
+    ('petrov', 'help@xmpp/desk',     'help@xmpp',   'закрыта заявка',                                 '2025-06-05 15:30:00', UNIX_TIMESTAMP('2025-06-05 15:30:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0402')))),
+
+    -- Rows the ingest must drop: a MAM service row (empty text) and a
+    -- client <-> client message that is not a support conversation.
+    ('petrov', 'help@xmpp',          'help@xmpp',   '',                       '2025-06-05 15:31:00', UNIX_TIMESTAMP('2025-06-05 15:31:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0403')))),
+    ('ivanov', 'petrov@xmpp',        'petrov@xmpp', 'обед сегодня в 13:00?',  '2025-06-05 12:00:00', UNIX_TIMESTAMP('2025-06-05 12:00:00') * 1000000,        UNHEX(CONCAT('0B0605', HEX('m0501')))),
+    ('petrov', 'ivanov@xmpp/pc',     'ivanov@xmpp', 'обед сегодня в 13:00?',  '2025-06-05 12:00:00', UNIX_TIMESTAMP('2025-06-05 12:00:00') * 1000000 + 1500, UNHEX(CONCAT('0B0605', HEX('m0501'))));

@@ -30,11 +30,12 @@ public class HelpAccountController {
     /** Only the help accounts the caller was granted (all of them for admins). */
     @GetMapping
     public List<HelpAccount> getAccounts() {
-        List<String> allowed = accessControl.describe().helpAccounts();
+        List<HelpAccount> all = helpAccountService.listAccounts();
         if (accessControl.currentUser().isAdmin()) {
-            return helpAccountService.listAccounts();
+            return all;
         }
-        return helpAccountService.listAccounts().stream()
+        List<String> allowed = accessControl.grantedHelpAccounts();
+        return all.stream()
                 .filter(a -> allowed.contains(a.account()))
                 .toList();
     }

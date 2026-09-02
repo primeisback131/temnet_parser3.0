@@ -2,6 +2,7 @@ package com.temnet.temnet_parser.analytics;
 
 import com.temnet.temnet_parser.security.AccessControlService;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,13 +33,16 @@ public class SyncController {
     private final AnalyticsSyncService syncService;
     private final AccessControlService accessControl;
     private final JdbcTemplate analytics;
+    private final Duration syncInterval;
 
     public SyncController(AnalyticsSyncService syncService,
                           AccessControlService accessControl,
-                          @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics) {
+                          @Qualifier("analyticsJdbcTemplate") JdbcTemplate analytics,
+                          @Value("${app.sync.interval:PT5M}") Duration syncInterval) {
         this.syncService = syncService;
         this.accessControl = accessControl;
         this.analytics = analytics;
+        this.syncInterval = syncInterval;
     }
 
     /** Incremental sync from the current watermark. */
@@ -46,7 +51,7 @@ public class SyncController {
         return start(false);
     }
 
-    /** Drop everything and re-ingest the whole dump. */
+    /** Re-ingest the whole dump into shadow tables and swap them in. */
     @PostMapping("/rebuild")
     public AnalyticsSyncService.SyncRun rebuild() {
         return start(true);
@@ -72,6 +77,8 @@ public class SyncController {
         result.put("reopenLlm", analytics.queryForList(
                 "SELECT reopen_llm AS verdict, COUNT(*) AS count FROM ticket"
                         + " WHERE reopen_llm IS NOT NULL GROUP BY reopen_llm"));
+        // The configured cadence, so the screen states the real one rather than a guess.
+        result.put("syncIntervalSeconds", syncInterval.toSeconds());
         // Current/last run — what the maintenance screen polls while a rebuild runs.
         result.put("run", syncService.lastRun());
         return result;

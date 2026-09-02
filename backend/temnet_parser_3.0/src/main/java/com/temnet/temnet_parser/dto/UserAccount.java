@@ -3,13 +3,18 @@ package com.temnet.temnet_parser.dto;
 import java.time.LocalDateTime;
 import java.util.List;
 
-/** An application account as shown to the administrator (never the hash). */
+/**
+ * An application account as shown to the administrator (never the hash).
+ * {@code mustChangePassword} flags a temporary password the user has not
+ * replaced yet.
+ */
 public record UserAccount(
         Long id,
         String username,
         String fullName,
         String role,
         boolean enabled,
+        boolean mustChangePassword,
         LocalDateTime createdAt,
         List<Grant> grants
 ) {

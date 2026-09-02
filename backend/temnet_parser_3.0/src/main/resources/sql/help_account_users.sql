@@ -1,7 +1,8 @@
 -- Per-user stats across every organization (group) served by one help
 -- account. A client belongs to the account if they exchanged messages with it
--- in the period; only those messages are counted. Ticket outcomes are the
--- client's overall numbers — tickets are not tied to a specific help account.
+-- in the period; only those messages are counted, and only the tickets this
+-- desk handled (ticket.account) — another desk's work with the same client
+-- is not this desk's report.
 SELECT
     cg.grp                   AS group_name,
     cg.client                AS user_name,
@@ -22,6 +23,7 @@ LEFT JOIN (
            SUM(status = 'closed' AND closed_at >= :start AND closed_at < :endExclusive)   AS closed,
            SUM(status = 'rejected' AND closed_at >= :start AND closed_at < :endExclusive) AS rejected
     FROM ticket
+    WHERE account = :account
     GROUP BY client
 ) AS tk ON tk.client = cg.client
 WHERE cg.grp NOT LIKE 'help%'

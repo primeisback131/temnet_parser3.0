@@ -1,36 +1,53 @@
 package com.temnet.temnet_parser.support;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Keyword dictionary that classifies a request message into a problem
  * category. Categories are ordered by priority: the first one whose keyword
  * matches wins, so broader buckets (Доступ, Оборудование) come last.
+ * <p>
+ * Every keyword is a stem anchored to the START of a word: «печат» finds
+ * «печатает» and «печать» but not «опечатка», «атол» finds the cash-register
+ * brand but not «Анатолий». A stem may carry a regex tail where the plain
+ * stem is ambiguous («почт(?!и\b)» skips the everyday «почти»).
  */
 public final class CategoryRules {
 
-    public record Category(String name, List<String> keywords) {
+    public record Category(String name, List<Pattern> patterns) {
     }
 
     public static final String OTHER = "Другое";
 
     private static final List<Category> CATEGORIES = List.of(
-            new Category("1С", List.of("1с", "1c", "зуп", "бухгалт")),
-            new Category("ЭЦП/Подпись", List.of("подпис", "эцп", "сертификат", "криптопро", "кэп")),
-            new Category("Касса/ККТ", List.of("касса", "кассе", "атол", "ккт", "фискальн", "эвотор")),
-            new Category("Спец-ПО", List.of("консультант", "гарант", "фомс", "скзи", "госуслуг")),
-            new Category("Печать", List.of("принтер", "печат", "картридж", "сканер", "мфу", "kyocera")),
-            new Category("Телефония", List.of("телефон", "атс", "sip", "сип", "микросип", "звон")),
-            new Category("Почта", List.of("почт", "п/я", "outlook", "ящик", "письм", "mail")),
-            new Category("Удалёнка", List.of("vpn", "впн", "openvpn", "rdp", "удаленк", "удалёнк", "удаленн", "удалённ")),
-            new Category("Сеть", List.of("интернет", "wi-fi", "вай-фай", "роутер", "сеть")),
-            new Category("Программы/ПО", List.of("эксель", "excel", "ворд", "word", "офис", "office", "браузер", "гугл", "хром", "chrome", "битрикс", "миранда", "vk teams", "vkteams")),
-            new Category("Доступ", List.of("пароль", "логин", "доступ", "заблокир", "учетн", "учётн")),
-            new Category("Файлы/Диск", List.of("файл", "папк", "диск", "архив")),
-            new Category("Оборудование", List.of("компьютер", "ноутбук", "монитор", "не включается", "клавиатур", "мышь", "считыват"))
+            category("1С", "1с", "1c", "зуп", "бухгалт"),
+            category("ЭЦП/Подпись", "подпис", "эцп", "сертификат", "криптопро", "кэп"),
+            category("Касса/ККТ", "касс(а|е|у|ы|ов)", "атол", "ккт", "фискальн", "эвотор"),
+            category("Спец-ПО", "консультант", "гарант(?!и)", "фомс", "скзи", "госуслуг"),
+            category("Печать", "принтер", "печат", "картридж", "сканер", "мфу", "kyocera"),
+            category("Телефония", "телефон", "атс", "sip", "сип\\b", "микросип", "звон"),
+            category("Почта", "почт(?!и\\b)", "п/я", "outlook", "ящик", "письм", "mail"),
+            category("Удалёнка", "vpn", "впн", "openvpn", "rdp", "удал[её]нк",
+                    "удал[её]нн\\w*\\s+(доступ|рабоч|стол|подключ)"),
+            category("Сеть", "интернет", "wi-fi", "вай-фай", "роутер", "сет[ьи]\\b", "сетев"),
+            category("Программы/ПО", "эксель", "excel", "ворд", "word", "офис", "office", "браузер", "гугл",
+                    "хром", "chrome", "битрикс", "миранда", "vk teams", "vkteams"),
+            category("Доступ", "парол", "логин", "доступ", "заблокир", "уч[её]тн"),
+            category("Файлы/Диск", "файл", "папк", "диск(?!усс)", "архив"),
+            category("Оборудование", "компьютер", "ноутбук", "монитор", "не включается", "клавиатур",
+                    "мыш[ьик]", "считыват")
     );
 
     private CategoryRules() {
+    }
+
+    private static Category category(String name, String... stems) {
+        return new Category(name, Arrays.stream(stems)
+                .map(stem -> Pattern.compile("\\b" + stem,
+                        Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE | Pattern.UNICODE_CHARACTER_CLASS))
+                .toList());
     }
 
     /** Rank of the fallback "other" bucket (all real categories rank lower). */
@@ -43,10 +60,9 @@ public final class CategoryRules {
      * or {@link #otherRank()}. Used by the ingest state machine.
      */
     public static int rankOf(String text) {
-        String lower = text.toLowerCase();
         for (int i = 0; i < CATEGORIES.size(); i++) {
-            for (String keyword : CATEGORIES.get(i).keywords()) {
-                if (lower.contains(keyword)) {
+            for (Pattern pattern : CATEGORIES.get(i).patterns()) {
+                if (pattern.matcher(text).find()) {
                     return i + 1;
                 }
             }

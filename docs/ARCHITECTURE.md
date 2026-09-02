@@ -52,31 +52,33 @@ DTO на бэкенде — **Java records** (Lombok не используетс
 
 ```
 temnet_parser_3.0/
-├─ backend/temnet_parser_3.0/          Spring Boot приложение (порт 8080)
+├─ backend/temnet_parser_3.0/          Spring Boot приложение (порт 8080, API под /api)
 │  ├─ build.gradle                     Java 25 toolchain, Spring Boot 4
+│  ├─ settings.gradle                  foojay-resolver: JDK 25 скачивается сам
 │  ├─ gradle/wrapper/                  Gradle wrapper (9.1.0)
 │  ├─ db/                              схема + сид-данные для локальной проверки
 │  └─ src/
 │     ├─ main/java/com/temnet/temnet_parser/
 │     │  ├─ Application.java           точка входа (@EnableScheduling)
-│     │  ├─ config/                    CORS, второй DataSource для аналитики
+│     │  ├─ config/                    DataSource'ы, CORS, проверки конфигурации на старте
+│     │  ├─ security/                  вход, сессии, перепроверка учётки, лимитер входа, Scope
 │     │  ├─ analytics/                 синхронизация, тикеты, LLM, /admin/sync
-│     │  ├─ controller/                HTTP-слой
+│     │  ├─ controller/                HTTP-слой (+ единый обработчик ошибок)
 │     │  ├─ service/                   бизнес-логика
-│     │  ├─ repository/                доступ к данным через JdbcClient
+│     │  ├─ repository/                доступ к данным через JdbcClient, ScopeSql
 │     │  ├─ dto/                       records (DTO + enum Bucket)
-│     │  └─ support/                   SqlLoader, CategoryRules, BusinessTime
+│     │  └─ support/                   SqlLoader, CategoryRules, ClosurePhrase, ReopenSignals, BusinessTime
 │     ├─ main/resources/
-│     │  ├─ application.properties     конфиг БД/CORS/sync/LLM (через env)
+│     │  ├─ application.properties     конфиг БД/сессий/sync/LLM (через env)
 │     │  ├─ analytics/schema.sql       схема аналитической БД
 │     │  └─ sql/                       SQL-запросы метрик (*.sql)
-│     └─ test/java/...                 ApplicationTests (context load)
-├─ frontend-react/                     React-приложение (Vite dev на 5173)
+│     └─ test/java/...                 юнит-тесты support/ и ScopeSql; ApplicationTests (нужна MariaDB)
+├─ frontend-react/                     React-приложение (Vite dev на 5173, /api → 8080)
 │  └─ src/
 │     ├─ main.tsx, App.tsx             bootstrap + роутинг + тема
 │     ├─ api/                          client, query-хуки, типы
 │     ├─ auth.tsx                      контекст входа и прав
-│     ├─ components/                   AppLayout, EChart
+│     ├─ components/                   AppLayout, EChart, ChangePasswordForm, QueryError
 │     ├─ lib/                          date, excel, format
 │     └─ pages/                        экраны
 ├─ run_backend.bat / run_frontend.bat  запуск
@@ -89,7 +91,7 @@ temnet_parser_3.0/
 
 | Таблица | Колонки (используемые) | Смысл |
 | --- | --- | --- |
-| `archive` | `id`, `username`, `peer`, `bare_peer`, `txt`, `created_at`, `xml` | сообщение: владелец архива, вторая сторона, текст, время, исходная станза |
+| `archive` | `id`, `username`, `peer`, `bare_peer`, `txt`, `created_at`, `timestamp`, `xml` | сообщение: владелец архива, вторая сторона, текст, время, микросекунды, исходная станза |
 | `sr_user` | `jid`, `grp` | принадлежность JID к группе (в т.ч. help-аккаунта к своему участку) |
 | `sr_group` | `name`, `opts` | настройки общего ростера; `displayed_groups` — организации, которые обслуживает участок |
 
@@ -129,6 +131,10 @@ temnet_parser_3.0/
 - **Направление** — `in` (написал клиент) / `out` (ответил оператор).
 - **Рабочее время** — Пн–Пт 08:00–18:00; все интервалы time-метрик считаются
   в рабочих секундах (`BusinessTime`).
+- **Часовой пояс.** Рабочие часы имеют смысл в поясе участка, а ejabberd
+  обычно пишет `created_at` в UTC. Если заданы `SOURCE_TZ` и `BUSINESS_TZ`,
+  каждая метка времени переводится из первого во второй при инжесте; иначе
+  берётся как есть. Смена поясов требует полной пересборки.
 
 ## 5. Синхронизация и тикеты
 
@@ -140,14 +146,22 @@ temnet_parser_3.0/
 при этом монотонно растёт — синхронизация идёт батчами по вотермарке id. Если
 дамп заменили на другой/старый (max id меньше вотермарки) — полный пересбор.
 
+**Полный пересбор идёт в теневых таблицах.** `message_rebuild` и
+`ticket_rebuild` создаются `CREATE TABLE … LIKE`, наполняются с нуля и в конце
+подменяют рабочие одним атомарным `RENAME TABLE`; только после этого
+вотермарка переписывается. Рабочие таблицы всё это время отдают прежние
+данные, а падение посреди пересбора их не трогает — тени просто удаляются
+при следующей попытке.
+
 **Ручной запуск.** Администратору доступна страница **Обслуживание**
 (`/admin/maintenance`): состояние базы, кнопка инкрементальной синхронизации и
 кнопка полного пересбора с предупреждением и подтверждением по слову. Пересбор
-нужен, когда изменились правила разбора (категории, фразы закрытия, окна) —
-иначе старые заявки останутся посчитанными по старому коду. Запуски
-асинхронные: одновременно идёт не больше одного (второй получает `409`), ход
-дела отдаётся в `GET /admin/sync/status` полем `run`, страница опрашивает его
-раз в 2 секунды. Запуск по расписанию, пока идёт ручной, просто пропускается.
+нужен, когда изменились правила разбора (категории, фразы закрытия, окна,
+часовые пояса) — иначе старые заявки останутся посчитанными по старому коду.
+Запуски асинхронные: одновременно идёт не больше одного (второй получает
+`409`), ход дела отдаётся в `GET /admin/sync/status` полем `run`, страница
+опрашивает его раз в 2 секунды. Запуск по расписанию, пока идёт ручной,
+просто пропускается.
 
 **Нормализация** (`normalizePairs`): служебные MAM-строки (пустой `txt`) и
 диалоги не-с-поддержкой отбрасываются. Две копии одного сообщения — одинаковый
@@ -161,8 +175,10 @@ SHA-1(client, stanza id, txt) и `INSERT IGNORE`; дальше в обработ
 
 **Стейт-машина тикетов** (на клиента, сообщения в хронологическом порядке):
 
-- сообщение клиента открывает заявку — кроме короткого «спасибо» в течение
-  4 рабочих часов после закрытия предыдущей;
+- сообщение клиента открывает заявку — кроме благодарности («спасибо», «ок»,
+  «+») в течение 4 рабочих часов после закрытия предыдущей; сообщение с
+  маркером повтора («не помогло», «опять») или с отрицанием благодарностью не
+  считается, как бы коротко оно ни было (`ReopenSignals`);
 - фраза оператора «закрыта заявка» / «заявка отклонена» закрывает её
   (статус `closed`/`rejected`), «заявка в работе» ставит отметку
   `in_progress_at`; фраза распознаётся с допуском на опечатки
@@ -178,22 +194,32 @@ SHA-1(client, stanza id, txt) и `INSERT IGNORE`; дальше в обработ
 спорным кандидатам модель отвечает SAME/NEW по текстам старой и новой заявки.
 Работает с любым OpenAI-совместимым chat-completions endpoint'ом
 (`app.llm.base-url` + `app.llm.api-key` + `app.llm.model`): Gemini free tier,
-Groq, OpenRouter, Anthropic, self-hosted — что угодно. Пока base-url пуст,
-шаг выключен. Запросы идут с темпом `app.llm.requests-per-minute`
-(по умолчанию 5/мин — укладывается в любой бесплатный тариф) и не больше
-`app.llm.max-per-sync` (20) за прогон, чтобы LLM-часть укладывалась в
-5-минутный интервал синхронизации; остальное дорешивается в следующих
-прогонах. Вердикты кэшируются в `llm_verdict`.
+Groq, OpenRouter, Anthropic, self-hosted — что угодно. **По умолчанию
+выключена** (base-url пуст): включение означает передачу текстов обращений
+клиентов внешнему сервису, о чём приложение предупреждает в логе при старте.
+Запросы идут с темпом `app.llm.requests-per-minute` (по умолчанию 20/мин) и
+не больше `app.llm.max-per-sync` (60) за прогон, чтобы LLM-часть укладывалась
+в интервал синхронизации; остальное дорешивается в следующих прогонах.
+Вердикты кэшируются в `llm_verdict`.
 
 ## 6. Backend
 
 ### Слои
 
-Запрос проходит строго через три слоя:
+Весь API живёт под контекстным путём `/api` (`server.servlet.context-path`),
+чтобы SPA и бэкенд жили на одном origin: dev-сервер Vite и продакшен-прокси
+проксируют `/api` на Spring Boot, и cookie сессии с CSRF-токеном не требуют
+кросс-доменных настроек. Запрос проходит строго через три слоя:
 
 ```
 HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analytics
 ```
+
+Ошибки превращает в JSON `{"message": …}` единый
+[`ApiExceptionHandler`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/controller/ApiExceptionHandler.java):
+`IllegalArgumentException` из сервисов — 400, нарушение уникальности — 409,
+`AccessDeniedException` — 403, всё неожиданное — 500 с записью в лог и без
+подробностей наружу.
 
 - **Controller** (`controller/`) — только HTTP: парсинг параметров
   (`@RequestParam`, даты `@DateTimeFormat(iso = DATE)` → `LocalDate`),
@@ -213,18 +239,38 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `CompanyController` | `GET /companies` |
 | `UserStatsController` | `GET /users` |
 | `HelpAccountController` | `GET /help-accounts`, `GET /help-accounts/report` (админ + руководитель) |
-| `AuthController` | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` |
+| `AuthController` | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password` (смена своего пароля) |
 | `UserAdminController` | `GET/POST/PUT/DELETE /admin/users…` (только администратор) |
-| `ChatController` | `GET /chat`, `GET /chat/chatlist` (админ + руководитель) |
+| `ChatController` | `GET /chat` (`user?` — переписка одного клиента), `GET /chat/chatlist` (список клиентов) (админ + руководитель) |
 | `MetricsController` | `GET /metrics/{timeseries,backlog,heatmap,sla,resolution,reopens,alerts,categories,operators}` (админ + руководитель) |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` (только администратор) |
 
 ### Авторизация и права
 
 Вход — по локальной учётке (логин + пароль, bcrypt), сессия живёт в
-HttpOnly-cookie; POST/PUT/DELETE защищены CSRF-токеном из cookie `XSRF-TOKEN`
-(заголовок `X-XSRF-TOKEN`). Всё, кроме `/auth/login`, требует входа — новый
-эндпоинт закрыт по умолчанию, а не по недосмотру.
+HttpOnly-cookie (`SameSite=Lax`, `Secure` включается за HTTPS); POST/PUT/DELETE
+защищены CSRF-токеном из cookie `XSRF-TOKEN` (заголовок `X-XSRF-TOKEN`). Всё,
+кроме `/auth/login`, требует входа — новый эндпоинт закрыт по умолчанию, а не
+по недосмотру. При входе id сессии меняется (защита от фиксации), а
+неудачные попытки считаются по логину и по адресу
+([`LoginAttemptService`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/security/LoginAttemptService.java)):
+после лимита вход отвечает `429` до конца окна.
+
+**Учётка перечитывается на каждом запросе.** В сессии лежит лишь снимок
+учётки на момент входа;
+[`AccountRefreshFilter`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/security/AccountRefreshFilter.java)
+перед каждой проверкой прав сверяет его с базой: отключённая или удалённая
+учётка тут же получает `401` и теряет сессию, изменённая роль применяется к
+этому же запросу. Иначе удалённый администратор сохранял бы полные права до
+истечения сессии.
+
+**Временные пароли.** Пароль, сгенерированный при установке или заданный
+администратором, помечен `must_change_password`: до его смены бэкенд
+отвечает `403` на всё, кроме `/auth/me`, `/auth/password` и `/auth/logout`, а
+интерфейс показывает только форму смены пароля. Сменить пароль самому можно
+и позже, через `POST /auth/password` с текущим паролем. Последнего активного
+администратора нельзя удалить, отключить или понизить; свою учётку удалить
+нельзя.
 
 Три роли: `admin` (видит всё, управляет учётками), `manager` (руководитель) и
 `user` (пользователь). Руководителю и пользователю выдаются **участки**
@@ -279,10 +325,19 @@ HttpOnly-cookie; POST/PUT/DELETE защищены CSRF-токеном из cooki
   не «все группы вообще»;
 - пустой набор прав даёт `AND 1 = 0` — пусто, но никогда не «всё»;
 - `Scope` — record, поэтому входит в ключ кэша: пользователи с одинаковыми
-  правами делят закэшированные ответы.
+  правами делят закэшированные ответы;
+- аномалии (`/metrics/alerts`) считаются глобально и фильтруются по
+  **развёрнутому** списку видимых групп, так что руководитель с доступом
+  только к участку видит аномалии его организаций.
+
+SQL-фрагменты фильтров живут в
+[`ScopeSql`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/repository/ScopeSql.java)
+и закреплены юнит-тестами (`ScopeSqlTest`): пустой scope, участок, группа,
+их сочетание и сужение до запрошенной группы.
 
 Первый администратор создаётся при старте на пустой базе
-(`APP_ADMIN_PASSWORD`, иначе пароль генерируется и пишется в лог один раз).
+(`APP_ADMIN_PASSWORD`, иначе пароль генерируется, пишется в лог один раз и
+считается временным — при первом входе его требуется сменить).
 
 ### DTO (`dto/`)
 
@@ -307,7 +362,9 @@ HttpOnly-cookie; POST/PUT/DELETE защищены CSRF-токеном из cooki
 Ключевые support-классы:
 
 - [`SqlLoader`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/SqlLoader.java) — загрузка SQL из classpath.
-- [`CategoryRules`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений (ранг + имя).
+- [`CategoryRules`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/CategoryRules.java) — словарь категорий обращений (ранг + имя); основы слов матчатся от начала слова.
+- [`ClosurePhrase`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/ClosurePhrase.java) — распознавание «закрыта заявка» с допуском на опечатки.
+- [`ReopenSignals`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/ReopenSignals.java) — благодарность после закрытия vs маркер повторного обращения.
 - [`BusinessTime`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/support/BusinessTime.java) — рабочие секунды между двумя моментами.
 - [`Bucket`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/dto/Bucket.java) — гранулярность времени; хранит SQL-шаблон усечения даты.
 
@@ -316,24 +373,40 @@ HttpOnly-cookie; POST/PUT/DELETE защищены CSRF-токеном из cooki
 [`application.properties`](../backend/temnet_parser_3.0/src/main/resources/application.properties) — всё читается из env с дефолтами:
 
 ```properties
+server.servlet.context-path=${API_CONTEXT_PATH:/api}
+server.servlet.session.cookie.same-site=${SESSION_COOKIE_SAMESITE:lax}
+server.servlet.session.cookie.secure=${SESSION_COOKIE_SECURE:false}
+app.auth.max-failures-per-user=${AUTH_MAX_FAILURES_PER_USER:10}
 spring.datasource.url=${DB_URL:jdbc:mariadb://localhost:3306/ejabberd}
+spring.datasource.hikari.maximum-pool-size=${DB_POOL_SIZE:4}
 app.analytics.url=${ANALYTICS_DB_URL:jdbc:mariadb://localhost:3306/temnet_analytics?createDatabaseIfNotExist=true}
+app.analytics.pool-size=${ANALYTICS_DB_POOL_SIZE:16}
 app.sync.interval=${SYNC_INTERVAL:PT5M}
 app.operator-prefix=${OPERATOR_PREFIX:help}
+app.time.source-zone=${SOURCE_TZ:}
+app.time.business-zone=${BUSINESS_TZ:}
 app.llm.base-url=${LLM_BASE_URL:}
 app.llm.api-key=${LLM_API_KEY:}
-app.llm.model=${LLM_MODEL:gemini-flash-latest}
-app.llm.max-per-sync=${LLM_MAX_PER_SYNC:20}
-app.llm.requests-per-minute=${LLM_RPM:5}
-app.cors.allowed-origin=${CORS_ORIGIN:http://localhost:5173}
+app.llm.model=${LLM_MODEL:meta-llama/llama-4-scout-17b-16e-instruct}
+app.llm.max-per-sync=${LLM_MAX_PER_SYNC:60}
+app.llm.requests-per-minute=${LLM_RPM:20}
+app.cors.allowed-origin=${CORS_ORIGIN:}
 spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize=500
 ```
 
-- Пул соединений — **HikariCP** (дефолт Spring Boot), для аналитики —
-  отдельный DataSource.
-- **CORS** — единый [`WebConfig`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java) (`allowedOrigins` из `app.cors.allowed-origin`).
+- Пулы соединений — **HikariCP**, два DataSource: дамп читает только
+  синхронизация (пул 4), аналитическая БД обслуживает все запросы (пул 16,
+  одна загрузка дашборда — восемь параллельных запросов).
+- **CORS** — единый [`WebConfig`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/config/WebConfig.java);
+  по умолчанию выключен (same-origin), `CORS_ORIGIN` нужен только если SPA
+  живёт на другом хосте и не проксируется.
 - **Кэш метрик** — Caffeine, ответы кэшируются по комбинации параметров;
-  после sync с новыми данными кэши чистятся.
+  после sync с новыми данными кэши чистятся. Права **не** кэшируются:
+  несколько запросов к крошечным таблицам дешевле, чем кэш, который нужно
+  держать согласованным.
+- [`StartupChecks`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/config/StartupChecks.java)
+  предупреждает в логе о паролях БД по умолчанию, cookie без `Secure` и
+  включённой передаче данных в LLM.
 
 ## 7. Frontend
 
@@ -360,7 +433,12 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
 
 - [`client.ts`](../frontend-react/src/api/client.ts) — тонкая обёртка над
   `fetch`; база — `import.meta.env.VITE_API_BASE` (`.env`, по умолчанию
-  `http://localhost:8080`). Один метод на эндпоинт.
+  относительный `/api`: dev-сервер и продакшен-прокси ведут его на бэкенд).
+  Один метод на эндпоинт. Ответы с ошибкой превращаются в `ApiError` с
+  текстом от сервера; `401` на любом вызове, кроме входа и стартовой проверки,
+  означает истёкшую сессию — клиент шлёт событие, по которому `AuthProvider`
+  сбрасывает пользователя и кэш запросов и показывает экран входа с
+  пояснением.
 - [`queries.ts`](../frontend-react/src/api/queries.ts) — хуки TanStack Query
   (`useGroups`, `useCompanies`, `useTimeseries`, `useSla`, …) с ключами
   кэша по параметрам.
@@ -369,10 +447,16 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
 
 ### Компоненты и утилиты
 
-- [`AppLayout`](../frontend-react/src/components/AppLayout.tsx) — сайдбар-меню + контент (`<Outlet/>`).
+- [`AppLayout`](../frontend-react/src/components/AppLayout.tsx) — сайдбар-меню + контент (`<Outlet/>`), кнопка смены пароля.
 - [`EChart`](../frontend-react/src/components/EChart.tsx) — тонкая обёртка над
-  `echarts` (init / setOption / resize / dispose); используется напрямую,
-  без `echarts-for-react`.
+  `echarts/core` (init / setOption / resize / dispose) с регистрацией только
+  нужных графиков и компонентов, чтобы ленивый чанк метрик не тянул всю
+  библиотеку; используется напрямую, без `echarts-for-react`.
+- [`QueryError`](../frontend-react/src/components/QueryError.tsx) — баннер
+  ошибки запроса; каждая страница показывает его вместо пустой таблицы.
+- [`ChangePasswordForm`](../frontend-react/src/components/ChangePasswordForm.tsx) —
+  форма смены пароля; используется и в модальном окне из шапки, и на экране
+  принудительной смены временного пароля.
 - `lib/` — [`date.ts`](../frontend-react/src/lib/date.ts) (формат `yyyy-MM-dd`,
   дефолтный диапазон), [`format.ts`](../frontend-react/src/lib/format.ts)
   (`humanizeSeconds`), [`excel.ts`](../frontend-react/src/lib/excel.ts)
@@ -387,12 +471,13 @@ Page → use*-хук (TanStack Query) → api.client → fetch → backend
 
 ## 8. Сборка и запуск
 
-**Требования:** JDK 25 (для бэка), Node 18+ (для фронта), MariaDB с базой
-`ejabberd`. Тестовая схема и данные — в
+**Требования:** любой JDK 17+ для запуска Gradle (JDK 25 для проекта
+скачивается автоматически через foojay-resolver), Node 18+ (для фронта),
+MariaDB с базой `ejabberd`. Тестовая схема и данные — в
 [`backend/.../db/`](../backend/temnet_parser_3.0/db/README.md).
 
 ```bat
-run_backend.bat     :: JAVA_HOME=JDK25 + gradlew bootRun → http://localhost:8080
+run_backend.bat     :: gradlew bootRun → http://localhost:8080/api
 run_frontend.bat    :: npm install (при первом запуске) + npm run dev → http://localhost:5173
 ```
 
@@ -401,9 +486,15 @@ run_frontend.bat    :: npm install (при первом запуске) + npm ru
 ```bash
 # backend
 cd backend/temnet_parser_3.0 && ./gradlew bootRun
+cd backend/temnet_parser_3.0 && ./gradlew test --tests 'com.temnet.temnet_parser.support.*' --tests 'com.temnet.temnet_parser.repository.*'   # юнит-тесты без БД
 # frontend
 cd frontend-react && npm install && npm run build   # tsc + vite build → dist/
 ```
+
+**Продакшен.** Статику из `frontend-react/dist` и `/api/*` раздаёт один
+reverse proxy (nginx, Caddy): SPA и API на одном origin, TLS на прокси,
+`SESSION_COOKIE_SECURE=true`, `FORWARD_HEADERS_STRATEGY=native`, пароли БД и
+`APP_ADMIN_PASSWORD` из окружения.
 
 ## 9. Соглашения
 
