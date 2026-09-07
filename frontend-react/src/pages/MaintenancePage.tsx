@@ -1,4 +1,12 @@
-import { DatabaseOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UnlockOutlined, WarningOutlined } from "@ant-design/icons";
+import {
+  DatabaseOutlined,
+  LogoutOutlined,
+  ReloadOutlined,
+  SyncOutlined,
+  TeamOutlined,
+  UnlockOutlined,
+  WarningOutlined,
+} from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -8,6 +16,7 @@ import {
   Descriptions,
   Input,
   Modal,
+  Popconfirm,
   Space,
   Spin,
   Table,
@@ -110,8 +119,23 @@ export default function MaintenancePage() {
     }
   };
 
+  const terminate = async (row: ActiveSession) => {
+    if (!row.id) return;
+    try {
+      await api.terminateSession(row.id);
+      message.success(`Сеанс ${row.username} завершён`);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "Не удалось завершить сеанс");
+    }
+    await refetchSessions();
+  };
+
   const sessionColumns: ColumnsType<ActiveSession> = [
-    { title: "Пользователь", dataIndex: "username", render: (v: string) => v || "-" },
+    {
+      title: "Пользователь",
+      dataIndex: "username",
+      render: (v: string, row) => (row.current ? `${v} (это вы)` : v || "-"),
+    },
     { title: "IP", dataIndex: "ip" },
     { title: "Браузер", dataIndex: "userAgent", render: (v: string) => browserName(v) },
     {
@@ -137,12 +161,28 @@ export default function MaintenancePage() {
     {
       title: "",
       key: "actions",
-      render: (_, row) =>
-        row.blocked ? (
-          <Button size="small" icon={<UnlockOutlined />} onClick={() => void unlock(row)}>
-            Снять блокировку
-          </Button>
-        ) : null,
+      render: (_, row) => (
+        <Space>
+          {row.blocked && (
+            <Button size="small" icon={<UnlockOutlined />} onClick={() => void unlock(row)}>
+              Снять блокировку
+            </Button>
+          )}
+          {row.id && !row.current && (
+            <Popconfirm
+              title={`Завершить сеанс ${row.username}?`}
+              description="Пользователя выкинет на экран входа при следующем запросе"
+              okText="Завершить"
+              cancelText="Отмена"
+              onConfirm={() => void terminate(row)}
+            >
+              <Button size="small" danger icon={<LogoutOutlined />}>
+                Завершить
+              </Button>
+            </Popconfirm>
+          )}
+        </Space>
+      ),
     },
   ];
 
@@ -263,9 +303,10 @@ export default function MaintenancePage() {
         <Typography.Paragraph type="secondary">
           Кто сейчас вошёл, и кого не пускает защита от перебора: заблокированный логин или адрес
           появляется здесь и без сеанса, блокировка снимается кнопкой или сама через 15 минут.
+          Чужой сеанс можно завершить принудительно, свой завершается через выход.
         </Typography.Paragraph>
         <Table
-          rowKey={(row) => `${row.username}@${row.ip}@${row.loginAt ?? ""}`}
+          rowKey={(row) => row.id ?? `${row.username}@${row.ip}`}
           columns={sessionColumns}
           dataSource={sessions}
           loading={sessionsFetching && sessions.length === 0}
