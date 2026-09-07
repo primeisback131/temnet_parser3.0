@@ -176,6 +176,7 @@ export const api = {
     send<void>(`/admin/users/${id}/password`, "PUT", { password }),
   deleteUser: (id: number) => send<void>(`/admin/users/${id}`, "DELETE"),
   listSessions: () => getJson<ActiveSession[]>("/admin/sessions"),
+  terminateSession: (id: string) => send<void>(`/admin/sessions/${encodeURIComponent(id)}`, "DELETE"),
   unlockSession: (username: string, ip: string) =>
     send<void>("/admin/sessions/unlock", "POST", { username, ip }),
 

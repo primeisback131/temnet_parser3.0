@@ -100,7 +100,7 @@ public class AuthController {
         context.setAuthentication(auth);
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, request, response);
-        activeSessions.register(request.getSession().getId(), username, ip, request.getHeader("User-Agent"));
+        activeSessions.register(request.getSession(), username, ip, request.getHeader("User-Agent"));
 
         log.info("Вход выполнен: user='{}' ip={}", username, ip);
         return accessControl.describe();

@@ -357,6 +357,10 @@ export interface LlmStatus {
  * lockout with no session behind it (then loginAt/lastSeen are null).
  */
 export interface ActiveSession {
+  /** Handle for ending the session; null for a lockout row. */
+  id: string | null;
+  /** The caller's own session. */
+  current: boolean;
   username: string;
   ip: string;
   userAgent: string;
