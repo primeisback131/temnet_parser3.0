@@ -1,4 +1,4 @@
-import { DatabaseOutlined, ReloadOutlined, SyncOutlined, UnlockOutlined, WarningOutlined } from "@ant-design/icons";
+import { DatabaseOutlined, ReloadOutlined, SyncOutlined, TeamOutlined, UnlockOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -10,15 +10,18 @@ import {
   Modal,
   Space,
   Spin,
-  Tooltip,
+  Table,
+  Tag,
   Typography,
 } from "antd";
+import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import { useSyncStatus } from "../api/queries";
-import type { SyncRun } from "../api/types";
+import { useSessions, useSyncStatus } from "../api/queries";
+import type { ActiveSession, SyncRun } from "../api/types";
 import QueryError from "../components/QueryError";
+import { browserName } from "../lib/browser";
 
 /** Typing this word is what arms the rebuild button - it is not undoable. */
 const CONFIRM_WORD = "ПЕРЕСОБРАТЬ";
@@ -52,6 +55,8 @@ export default function MaintenancePage() {
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const { data: status, isLoading, error, refetch } = useSyncStatus();
+  const { data: sessions = [], isFetching: sessionsFetching, error: sessionsError, refetch: refetchSessions } =
+    useSessions();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmWord, setConfirmWord] = useState("");
   const [starting, setStarting] = useState(false);
@@ -95,14 +100,51 @@ export default function MaintenancePage() {
     }
   };
 
-  const unlock = async () => {
+  const unlock = async (row: ActiveSession) => {
     try {
-      await api.clearLockouts();
-      message.success("Блокировки входа сняты");
+      await api.unlockSession(row.username, row.ip);
+      message.success("Блокировка снята");
+      await refetchSessions();
     } catch (e) {
-      message.error(e instanceof Error ? e.message : "Не удалось снять блокировки");
+      message.error(e instanceof Error ? e.message : "Не удалось снять блокировку");
     }
   };
+
+  const sessionColumns: ColumnsType<ActiveSession> = [
+    { title: "Пользователь", dataIndex: "username", render: (v: string) => v || "-" },
+    { title: "IP", dataIndex: "ip" },
+    { title: "Браузер", dataIndex: "userAgent", render: (v: string) => browserName(v) },
+    {
+      title: "Вход",
+      dataIndex: "loginAt",
+      render: (v: string | null) => (v ? dayjs(v).format("DD.MM HH:mm") : "-"),
+    },
+    {
+      title: "Активность",
+      dataIndex: "lastSeen",
+      render: (v: string | null) => (v ? dayjs(v).format("DD.MM HH:mm:ss") : "-"),
+    },
+    {
+      title: "Статус",
+      dataIndex: "blocked",
+      render: (blocked: boolean, row) =>
+        blocked ? (
+          <Tag color="error">Заблокирован</Tag>
+        ) : row.loginAt ? (
+          <Tag color="success">Активен</Tag>
+        ) : null,
+    },
+    {
+      title: "",
+      key: "actions",
+      render: (_, row) =>
+        row.blocked ? (
+          <Button size="small" icon={<UnlockOutlined />} onClick={() => void unlock(row)}>
+            Снять блокировку
+          </Button>
+        ) : null,
+    },
+  ];
 
   const elapsed = run ? formatDuration(now - dayjs(run.startedAt).valueOf()) : "";
   const interval = status ? formatInterval(status.syncIntervalSeconds) : "по расписанию";
@@ -193,11 +235,6 @@ export default function MaintenancePage() {
             <Button danger icon={<WarningOutlined />} disabled={running} onClick={() => setConfirmOpen(true)}>
               Пересобрать базу
             </Button>
-            <Tooltip title="Сбрасывает счётчики неудачных попыток входа по всем логинам и адресам">
-              <Button icon={<UnlockOutlined />} onClick={() => void unlock()}>
-                Снять блокировки входа
-              </Button>
-            </Tooltip>
           </Space>
 
           <Alert
@@ -207,6 +244,36 @@ export default function MaintenancePage() {
             description="Только если изменились правила разбора: категории, классификация заявок, окна истечения и повторных обращений, часовые пояса. Пересборка перечитывает дамп заново и применяет текущий код; без неё старые заявки останутся посчитанными по старым правилам."
           />
         </Space>
+      </Card>
+
+      <Card
+        title={
+          <Space>
+            <TeamOutlined />
+            Сеансы
+          </Space>
+        }
+        extra={
+          <Button icon={<ReloadOutlined />} size="small" onClick={() => void refetchSessions()}>
+            Обновить
+          </Button>
+        }
+      >
+        <QueryError error={sessionsError} />
+        <Typography.Paragraph type="secondary">
+          Кто сейчас вошёл, и кого не пускает защита от перебора: заблокированный логин или адрес
+          появляется здесь и без сеанса, блокировка снимается кнопкой или сама через 15 минут.
+        </Typography.Paragraph>
+        <Table
+          rowKey={(row) => `${row.username}@${row.ip}@${row.loginAt ?? ""}`}
+          columns={sessionColumns}
+          dataSource={sessions}
+          loading={sessionsFetching && sessions.length === 0}
+          pagination={false}
+          size="small"
+          scroll={{ x: true }}
+          locale={{ emptyText: "Нет активных сеансов" }}
+        />
       </Card>
 
       <Modal

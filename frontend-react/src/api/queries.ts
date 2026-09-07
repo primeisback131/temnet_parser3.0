@@ -154,3 +154,12 @@ export function useSyncStatus() {
     refetchInterval: (query) => (query.state.data?.run?.running ? 2000 : false),
   });
 }
+
+/** Signed-in sessions and lockouts, refreshed while the maintenance screen is open. */
+export function useSessions() {
+  return useQuery({
+    queryKey: ["sessions"],
+    queryFn: api.listSessions,
+    refetchInterval: 15_000,
+  });
+}

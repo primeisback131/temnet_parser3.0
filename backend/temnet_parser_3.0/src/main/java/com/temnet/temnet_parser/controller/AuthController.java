@@ -2,6 +2,8 @@ package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.CurrentUser;
 import com.temnet.temnet_parser.security.AccessControlService;
+import com.temnet.temnet_parser.security.ActiveSessions;
+import com.temnet.temnet_parser.security.ClientIp;
 import com.temnet.temnet_parser.security.AppPrincipal;
 import com.temnet.temnet_parser.security.LoginAttemptService;
 import com.temnet.temnet_parser.service.UserService;
@@ -45,24 +47,27 @@ public class AuthController {
     private final LoginAttemptService loginAttempts;
     private final UserService userService;
     private final SecurityContextRepository contextRepository;
+    private final ActiveSessions activeSessions;
 
     public AuthController(AuthenticationManager authenticationManager,
                           AccessControlService accessControl,
                           LoginAttemptService loginAttempts,
                           UserService userService,
-                          SecurityContextRepository contextRepository) {
+                          SecurityContextRepository contextRepository,
+                          ActiveSessions activeSessions) {
         this.authenticationManager = authenticationManager;
         this.accessControl = accessControl;
         this.loginAttempts = loginAttempts;
         this.userService = userService;
         this.contextRepository = contextRepository;
+        this.activeSessions = activeSessions;
     }
 
     @PostMapping("/login")
     public CurrentUser login(@RequestBody LoginRequest body,
                              HttpServletRequest request, HttpServletResponse response) {
         String username = body.username() == null ? "" : body.username().trim();
-        String ip = request.getRemoteAddr();
+        String ip = ClientIp.of(request);
 
         if (loginAttempts.isBlocked(username, ip)) {
             log.warn("Вход отклонён: превышен лимит неудачных попыток, user='{}' ip={}", username, ip);
@@ -95,6 +100,7 @@ public class AuthController {
         context.setAuthentication(auth);
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, request, response);
+        activeSessions.register(request.getSession().getId(), username, ip, request.getHeader("User-Agent"));
 
         log.info("Вход выполнен: user='{}' ip={}", username, ip);
         return accessControl.describe();

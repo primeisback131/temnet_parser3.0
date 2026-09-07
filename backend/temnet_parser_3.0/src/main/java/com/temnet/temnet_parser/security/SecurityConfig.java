@@ -86,7 +86,8 @@ public class SecurityConfig {
             HttpSecurity http,
             @Qualifier("corsConfigurationSource") CorsConfigurationSource cors,
             SecurityContextRepository contextRepository,
-            UserRepository userRepository) throws Exception {
+            UserRepository userRepository,
+            ActiveSessions activeSessions) throws Exception {
         return http
                 .cors(c -> c.configurationSource(cors))
                 .csrf(csrf -> csrf
@@ -102,7 +103,7 @@ public class SecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 // Runs once the session's principal is loaded and before any
                 // authorization decision, so the decision is made on live data.
-                .addFilterBefore(new AccountRefreshFilter(userRepository, contextRepository), AuthorizationFilter.class)
+                .addFilterBefore(new AccountRefreshFilter(userRepository, contextRepository, activeSessions), AuthorizationFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/login").permitAll()
                         .requestMatchers("/admin/**").hasRole("ADMIN")

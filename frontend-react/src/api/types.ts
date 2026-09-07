@@ -272,3 +272,16 @@ export interface SyncStatus {
   syncIntervalSeconds: number;
   run: SyncRun | null;
 }
+
+/**
+ * A row of the maintenance screen's session list: a signed-in session, or a
+ * lockout with no session behind it (then loginAt/lastSeen are null).
+ */
+export interface ActiveSession {
+  username: string;
+  ip: string;
+  userAgent: string;
+  loginAt: string | null;
+  lastSeen: string | null;
+  blocked: boolean;
+}

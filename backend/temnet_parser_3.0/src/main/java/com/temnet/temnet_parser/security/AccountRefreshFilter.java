@@ -38,11 +38,14 @@ public class AccountRefreshFilter extends OncePerRequestFilter {
 
     private final UserRepository userRepository;
     private final SecurityContextRepository contextRepository;
+    private final ActiveSessions activeSessions;
     private final SecurityContextHolderStrategy holder = SecurityContextHolder.getContextHolderStrategy();
 
-    public AccountRefreshFilter(UserRepository userRepository, SecurityContextRepository contextRepository) {
+    public AccountRefreshFilter(UserRepository userRepository, SecurityContextRepository contextRepository,
+                                ActiveSessions activeSessions) {
         this.userRepository = userRepository;
         this.contextRepository = contextRepository;
+        this.activeSessions = activeSessions;
     }
 
     @Override
@@ -58,6 +61,11 @@ public class AccountRefreshFilter extends OncePerRequestFilter {
         if (current.isEmpty() || !current.get().isEnabled()) {
             endSession(request, response);
             return;
+        }
+
+        HttpSession session = request.getSession(false);
+        if (session != null) {
+            activeSessions.touch(session.getId());
         }
 
         AppPrincipal fresh = current.get();
