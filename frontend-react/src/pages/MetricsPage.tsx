@@ -27,7 +27,6 @@ import dayjs from "dayjs";
 import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client";
 import {
   useAlerts,
   useBacklog,
@@ -35,6 +34,7 @@ import {
   useCategories,
   useGroups,
   useHeatmap,
+  useHelpAccounts,
   useReopens,
   useResolution,
   useSla,
@@ -46,10 +46,12 @@ import QueryError from "../components/QueryError";
 import StatCard from "../components/StatCard";
 import { areaFade, barFade, barFadeX, chartColors, dot, legendTop } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
-import { exportToExcel, exportWorkbook } from "../lib/excel";
+import { exportToExcel } from "../lib/excel";
+import { exportHelpReport } from "../lib/helpReport";
 import { humanizeSeconds } from "../lib/format";
 import { tint } from "../lib/palette";
 import { useMediaQuery } from "../lib/useMediaQuery";
+import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
 
 const { RangePicker } = DatePicker;
@@ -111,6 +113,10 @@ export default function MetricsPage() {
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
   const [exporting, setExporting] = useState(false);
+  const [helpAccount, setHelpAccount] = useState<string | null>(null);
+  const { canExport } = useAuth();
+  // /help-accounts is closed to read-only accounts - asking would earn a 403.
+  const { data: helpAccounts = [] } = useHelpAccounts(canExport);
   const c = chartColors(mode);
   // Below this the legend of a two-axis chart spans the full width and would
   // run into the axis names sitting in the top corners, so those are dropped
@@ -449,113 +455,13 @@ export default function MetricsPage() {
   }, [reopens, labelFormat, c, unit, gridTop]);
 
   const exportReport = async () => {
+    if (!helpAccount) return;
     setExporting(true);
     try {
-      await buildReport();
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "Не удалось сформировать отчёт");
+      await exportHelpReport(message, start, end, helpAccount);
     } finally {
       setExporting(false);
     }
-  };
-
-  const buildReport = async () => {
-    const [companies, operators] = await Promise.all([
-      api.getCompanies(startStr, endStr),
-      api.getOperators(startStr, endStr, group ?? undefined),
-    ]);
-    await exportWorkbook(
-      [
-        {
-          name: "Сводка",
-          rows: [
-            { Показатель: "Период", Значение: `${startStr} - ${endStr}` },
-            { Показатель: "Группа", Значение: group ?? "все" },
-            { Показатель: "Сообщений", Значение: totals.messages },
-            {
-              Показатель: backlogClamped
-                ? `Открытых заявок на ${dayjs(backlog!.asOf).format("DD.MM.YYYY")} (конец данных)`
-                : "Открытых заявок на конец периода",
-              Значение: backlog?.openTickets ?? 0,
-            },
-            { Показатель: "Закрытых заявок", Значение: totals.closed },
-            { Показатель: "Отклонённых", Значение: totals.rejected },
-            { Показатель: "Повторных обращений (вероятных)", Значение: reopenTotals.probable },
-            { Показатель: "Повторных обращений, % от закрытых", Значение: reopenTotals.rate },
-            {
-              Показатель: "Первый ответ, медиана",
-              Значение: overallFrt ? humanizeSeconds(overallFrt.median) : "-",
-            },
-          ],
-        },
-        {
-          name: "Динамика",
-          rows: data.map((p) => ({
-            Период: p.bucket,
-            Сообщений: p.messages,
-            Закрыто: p.closed,
-            Отклонено: p.rejected,
-            "Открытых на конец": p.backlog,
-          })),
-        },
-        {
-          name: "Первый ответ",
-          rows: sla.map((p) => ({
-            Период: p.bucket,
-            Ответов: p.responses,
-            "Медиана, с": Math.round(p.p50Seconds),
-            "p90, с": Math.round(p.p90Seconds),
-            "Среднее, с": Math.round(p.avgSeconds),
-          })),
-        },
-        {
-          name: "Время решения",
-          rows: resolution.map((p) => ({
-            Период: p.bucket,
-            Решено: p.resolved,
-            "Медиана, мин": Math.round(p.p50Seconds / 60),
-            "p90, ч": +(p.p90Seconds / 3600).toFixed(1),
-            "Среднее, ч": +(p.avgSeconds / 3600).toFixed(1),
-          })),
-        },
-        {
-          name: "Повторы",
-          rows: reopens.map((p) => ({
-            Период: p.bucket,
-            Закрыто: p.closed,
-            Вероятные: p.probable,
-            Подтверждённые: p.confirmed,
-          })),
-        },
-        {
-          name: "Категории",
-          rows: categories.map((c) => ({ Категория: c.category, Обращений: c.requests })),
-        },
-        {
-          name: "Операторы",
-          rows: operators.map((o) => ({
-            Оператор: o.operator,
-            Закрыто: o.closed,
-            Отклонено: o.rejected,
-            Сообщений: o.messages,
-            Клиентов: o.clients,
-            "Ср. первый ответ, с": o.avgReplySeconds == null ? "" : Math.round(o.avgReplySeconds),
-          })),
-        },
-        {
-          name: "Компании",
-          rows: companies.map((c) => ({
-            Компания: c.groupName,
-            "Активных пользователей": c.activeUsers,
-            "Всего пользователей": c.totalUsers,
-            Закрыто: c.closedRequests,
-            Отклонено: c.rejectedRequests,
-            Сообщений: c.totalMessages,
-          })),
-        },
-      ],
-      `Отчёт_${group ?? "все"}_${startStr}_${endStr}`,
-    );
   };
 
   // Number of times each weekday (0=Mon..6=Sun) occurs in the selected range,
@@ -652,11 +558,29 @@ export default function MetricsPage() {
                 { label: "Месяц", value: "month" },
               ]}
             />
-            <Tooltip title="Excel со всеми метриками за период">
-              <Button icon={<FileExcelOutlined />} onClick={() => void exportReport()} loading={exporting}>
-                Отчёт
-              </Button>
-            </Tooltip>
+            {canExport && (
+              <>
+                <Select
+                  placeholder="Help-аккаунт"
+                  allowClear
+                  showSearch
+                  style={{ width: 200 }}
+                  value={helpAccount}
+                  onChange={(v) => setHelpAccount(v ?? null)}
+                  options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
+                />
+                <Tooltip title="Все метрики по группам аккаунта плюс лист на каждую группу. Период больше месяца выгружается zip-архивом по месяцам">
+                  <Button
+                    icon={<FileExcelOutlined />}
+                    onClick={() => void exportReport()}
+                    loading={exporting}
+                    disabled={!helpAccount}
+                  >
+                    Отчёт по help
+                  </Button>
+                </Tooltip>
+              </>
+            )}
           </Space>
         </Space>
       </Card>
