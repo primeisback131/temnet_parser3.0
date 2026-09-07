@@ -151,7 +151,8 @@ run_frontend_prod.bat
 | GET | `/metrics/categories?start&end&groupName?` | категории заявок |
 | GET | `/metrics/operators?start&end&groupName?` | лидерборд операторов |
 | GET/POST/PUT/DELETE | `/admin/users…` | учётки и доступы (администратор) |
-| DELETE | `/admin/users/lockouts` | снять блокировки входа по логинам и адресам |
+| GET | `/admin/sessions` | активные сеансы (пользователь, адрес, браузер, активность) и текущие блокировки входа |
+| POST | `/admin/sessions/unlock` | снять блокировку входа с логина и адреса |
 | POST | `/admin/sync` | инкрементальная синхронизация вручную (запуск, ответ сразу) |
 | POST | `/admin/sync/rebuild` | полная пересборка аналитической БД в теневых таблицах (запуск, ответ сразу) |
 | GET | `/admin/sync/status` | состояние синхронизации, ход текущего запуска и счётчики |

@@ -167,3 +167,12 @@ export function useLlmStatus() {
     refetchInterval: (query) => (query.state.data?.run?.running ? 3000 : 30000),
   });
 }
+
+/** Signed-in sessions and lockouts, refreshed while the maintenance screen is open. */
+export function useSessions() {
+  return useQuery({
+    queryKey: ["sessions"],
+    queryFn: api.listSessions,
+    refetchInterval: 15_000,
+  });
+}

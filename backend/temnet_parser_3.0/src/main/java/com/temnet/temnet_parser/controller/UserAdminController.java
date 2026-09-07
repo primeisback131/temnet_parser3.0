@@ -4,7 +4,6 @@ import com.temnet.temnet_parser.dto.Grant;
 import com.temnet.temnet_parser.dto.HelpAccountScope;
 import com.temnet.temnet_parser.dto.UserAccount;
 import com.temnet.temnet_parser.security.AccessControlService;
-import com.temnet.temnet_parser.security.LoginAttemptService;
 import com.temnet.temnet_parser.service.UserService;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,19 +33,10 @@ public class UserAdminController {
 
     private final UserService userService;
     private final AccessControlService accessControl;
-    private final LoginAttemptService loginAttempts;
 
-    public UserAdminController(UserService userService, AccessControlService accessControl,
-                               LoginAttemptService loginAttempts) {
+    public UserAdminController(UserService userService, AccessControlService accessControl) {
         this.userService = userService;
         this.accessControl = accessControl;
-        this.loginAttempts = loginAttempts;
-    }
-
-    /** Clears the brute-force counters, so a user locked out by login name or address can try again. */
-    @DeleteMapping("/lockouts")
-    public void clearLockouts() {
-        loginAttempts.clearAll();
     }
 
     @GetMapping

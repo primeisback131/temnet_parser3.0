@@ -1,4 +1,5 @@
 import type {
+  ActiveSession,
   AlertsReport,
   CurrentUser,
   HelpAccountScope,
@@ -174,7 +175,9 @@ export const api = {
   setUserPassword: (id: number, password: string) =>
     send<void>(`/admin/users/${id}/password`, "PUT", { password }),
   deleteUser: (id: number) => send<void>(`/admin/users/${id}`, "DELETE"),
-  clearLockouts: () => send<void>("/admin/users/lockouts", "DELETE"),
+  listSessions: () => getJson<ActiveSession[]>("/admin/sessions"),
+  unlockSession: (username: string, ip: string) =>
+    send<void>("/admin/sessions/unlock", "POST", { username, ip }),
 
   // ---- analytics DB maintenance (admins only) ----
   getSyncStatus: () => getJson<SyncStatus>("/admin/sync/status"),
