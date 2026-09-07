@@ -13,9 +13,11 @@ import { ApiError } from "./api/client";
 import { AuthProvider } from "./auth";
 import { buildTheme } from "./lib/antdTheme";
 import { applyThemeMode, initialThemeMode, ThemeModeProvider, useThemeMode } from "./theme";
+import { ensureAnimationFrames } from "./lib/animationFrames";
 
 dayjs.locale("ru");
 
+ensureAnimationFrames();
 // Before the first paint, so no frame renders with unresolved CSS variables.
 applyThemeMode(initialThemeMode());
 
