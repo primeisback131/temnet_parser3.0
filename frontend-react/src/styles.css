@@ -487,15 +487,9 @@ body {
   color: var(--text-faint);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
+/* No prefers-reduced-motion override here: forcing antd's open animations
+   to ~0ms leaves its popups waiting for an animation end that never comes,
+   parked at -1000vw. Windows sets reduced motion in every RDP session. */
 
 /* ─── Narrow screens ───────────────────────────────── */
 /* The chat is two panes side by side; on a phone they stack, the client
