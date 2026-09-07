@@ -13,11 +13,9 @@ import { ApiError } from "./api/client";
 import { AuthProvider } from "./auth";
 import { buildTheme } from "./lib/antdTheme";
 import { applyThemeMode, initialThemeMode, ThemeModeProvider, useThemeMode } from "./theme";
-import { ensureAnimationFrames } from "./lib/animationFrames";
 
 dayjs.locale("ru");
 
-ensureAnimationFrames();
 // Before the first paint, so no frame renders with unresolved CSS variables.
 applyThemeMode(initialThemeMode());
 
@@ -36,10 +34,8 @@ const queryClient = new QueryClient({
 /** Applies the current light/dark mode to the antd component tree. */
 function ThemedApp() {
   const { mode } = useThemeMode();
-  // virtual={false}: the virtualised dropdown list renders empty in some
-  // browsers found on office machines; the lists here are short anyway.
   return (
-    <ConfigProvider locale={ruRU} theme={buildTheme(mode)} virtual={false}>
+    <ConfigProvider locale={ruRU} theme={buildTheme(mode)}>
       {/* antd's App provides the message/notification context - the static
           message API silently does nothing under React 19. */}
       <AntApp>

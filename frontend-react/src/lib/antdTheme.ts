@@ -8,9 +8,6 @@ export function buildTheme(mode: ThemeMode): ThemeConfig {
   return {
     algorithm: dark ? antdAlgorithms.darkAlgorithm : antdAlgorithms.defaultAlgorithm,
     token: {
-      // No transitions: popups that fade and slide in stay blank on virtual
-      // machines and remote desktops without GPU compositing.
-      motion: false,
       colorPrimary: t.brand,
       colorInfo: t.brand,
       colorLink: t.brand,
