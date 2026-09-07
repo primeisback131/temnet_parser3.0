@@ -558,29 +558,6 @@ export default function MetricsPage() {
                 { label: "Месяц", value: "month" },
               ]}
             />
-            {canExport && (
-              <>
-                <Select
-                  placeholder="Help-аккаунт"
-                  allowClear
-                  showSearch
-                  style={{ width: 200 }}
-                  value={helpAccount}
-                  onChange={(v) => setHelpAccount(v ?? null)}
-                  options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
-                />
-                <Tooltip title="Все метрики по группам аккаунта плюс лист на каждую группу. Период больше месяца выгружается zip-архивом по месяцам">
-                  <Button
-                    icon={<FileExcelOutlined />}
-                    onClick={() => void exportReport()}
-                    loading={exporting}
-                    disabled={!helpAccount}
-                  >
-                    Отчёт по help
-                  </Button>
-                </Tooltip>
-              </>
-            )}
           </Space>
         </Space>
       </Card>
@@ -784,6 +761,36 @@ export default function MetricsPage() {
           </Card>
         </Col>
       </Row>
+
+      {canExport && (
+        <Card title="Отчёт по help-аккаунту">
+          <Space wrap size={12} align="center">
+            <span className="meta">
+              Excel за выбранный период: сводка по группам аккаунта и лист на каждую группу с
+              пользователями, динамикой и категориями. Период больше месяца выгружается zip-архивом по
+              месяцам.
+            </span>
+            <Select
+              placeholder="Help-аккаунт"
+              allowClear
+              showSearch
+              style={{ width: 220 }}
+              value={helpAccount}
+              onChange={(v) => setHelpAccount(v ?? null)}
+              options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
+            />
+            <Button
+              type="primary"
+              icon={<FileExcelOutlined />}
+              onClick={() => void exportReport()}
+              loading={exporting}
+              disabled={!helpAccount}
+            >
+              Выгрузить
+            </Button>
+          </Space>
+        </Card>
+      )}
 
       <Modal
         title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")}`}
