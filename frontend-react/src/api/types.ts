@@ -152,10 +152,43 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-/** Tickets still open at the end of the period, and the moment it describes. */
+/** A row of the chat screen's conversation list, freshest first. */
+export interface ChatParticipant {
+  client: string;
+  lastAt: string;
+  messages: number;
+  lastText: string;
+  lastDirection: "in" | "out";
+}
+
+/** A ticket of the conversation on screen, drawn as markers between messages. */
+export interface ChatTicket {
+  openedAt: string;
+  inProgressAt: string | null;
+  closedAt: string | null;
+  lastActivity: string;
+  status: "open" | "closed" | "rejected" | "expired";
+  category: string;
+  frtSeconds: number | null;
+  resolutionSeconds: number | null;
+  closedBy: string | null;
+  reopen: boolean;
+  thanked: boolean;
+}
+
+/**
+ * Tickets still open at the end of the period, and the moment it describes.
+ * The age buckets (calendar days since opening) sum to openTickets.
+ */
 export interface BacklogReport {
   asOf: string; // ISO datetime - period end, or the freshest message if earlier
   openTickets: number;
+  ageDay: number; // up to 1 day
+  ageThreeDays: number; // 2-3 days
+  ageWeek: number; // 4-7 days
+  ageMonth: number; // 8-30 days
+  ageOlder: number; // more than 30 days
+  oldestOpenedAt: string | null;
 }
 
 /** One ticket behind the backlog count. */
@@ -199,6 +232,61 @@ export interface SlaPoint {
 export interface CategoryCount {
   category: string;
   requests: number;
+  /** Medians in working seconds; null when nothing qualified. */
+  p50FrtSeconds: number | null;
+  p50ResolutionSeconds: number | null;
+  avgMessages: number;
+  reopens: number;
+  unanswered: number;
+}
+
+/** Tickets of one category opened in one bucket. */
+export interface CategoryPoint {
+  bucket: string; // ISO date
+  category: string;
+  requests: number;
+}
+
+/**
+ * Quality summary of the tickets opened in the period - counts only, the
+ * screen turns them into shares. Durations are working seconds.
+ */
+export interface PeriodSummary {
+  opened: number;
+  closed: number;
+  rejected: number;
+  expired: number; // ended by silence, closing phrase never written
+  stillOpen: number;
+  unanswered: number; // ended without any operator message
+  answered: number; // first response within the outlier cap
+  answeredFast: number; // within 15 minutes
+  answeredHour: number; // within one hour
+  resolved: number; // closed within the outlier cap
+  resolvedHour: number; // closed within one working hour
+  resolvedDay: number; // closed within one working day
+  inProgress: number; // "заявка в работе" was written
+  avgPickupSeconds: number | null; // open -> in progress
+  thanked: number; // client acknowledged the closure
+  replies: number; // operator replies after the first one
+  replySeconds: number; // their total wait
+  avgMessages: number | null;
+  p50Messages: number | null;
+  p90Messages: number | null;
+  handoffs: number; // tickets where more than one desk wrote
+  clients: number;
+  newClients: number; // no ticket before the period
+  incoming: number; // incoming messages
+  offHours: number; // of them outside Mon-Fri 08:00-18:00
+}
+
+/** A client ranked by tickets opened in the period. */
+export interface ClientStat {
+  client: string;
+  groupNames: string | null;
+  tickets: number;
+  messages: number;
+  reopens: number;
+  newClient: boolean;
 }
 
 export interface ResolutionPoint {
@@ -235,6 +323,8 @@ export interface OperatorStat {
   messages: number;
   closed: number;
   rejected: number;
+  reopened: number; // closures that came back as a repeat request
+  thanked: number; // closures the client acknowledged
   clients: number;
   avgReplySeconds: number | null;
 }

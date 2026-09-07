@@ -4,10 +4,13 @@ import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
+import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
@@ -113,6 +116,34 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
         return metricsService.categories(start, end, scope(groupName));
+    }
+
+    /** Tickets per category per bucket, for the category trend chart. */
+    @GetMapping("/categories/timeseries")
+    public List<CategoryPoint> categoryTimeseries(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName,
+            @RequestParam(defaultValue = "day") String bucket) {
+        return metricsService.categoryTimeseries(start, end, scope(groupName), Bucket.from(bucket));
+    }
+
+    /** Quality summary of the tickets opened in the period. */
+    @GetMapping("/summary")
+    public PeriodSummary summary(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.summary(start, end, scope(groupName));
+    }
+
+    /** Clients with the most tickets in the period. */
+    @GetMapping("/clients")
+    public List<ClientStat> clients(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.clients(start, end, scope(groupName));
     }
 
     @GetMapping("/operators")

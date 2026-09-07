@@ -1,11 +1,16 @@
 -- Per-operator leaderboard: authored messages and distinct clients from the
 -- message table; closed/rejected tickets by closing operator; average
--- first-response time over tickets this operator answered first.
+-- first-response time over tickets this operator answered first. Closure
+-- quality rides along: how many of the closures came back as a repeat
+-- request (the reopening ticket points at the closed one) and how many the
+-- client acknowledged with thanks.
 SELECT
     stats.operator,
     stats.messages,
     COALESCE(closes.closed, 0)   AS closed,
     COALESCE(closes.rejected, 0) AS rejected,
+    COALESCE(closes.reopened, 0) AS reopened,
+    COALESCE(closes.thanked, 0)  AS thanked,
     stats.clients,
     frt.avg_reply_seconds
 FROM (
@@ -17,7 +22,13 @@ FROM (
     GROUP BY m.author
 ) AS stats
 LEFT JOIN (
-    SELECT t.closed_by AS operator, SUM(t.status = 'closed') AS closed, SUM(t.status = 'rejected') AS rejected
+    SELECT t.closed_by AS operator,
+           SUM(t.status = 'closed')   AS closed,
+           SUM(t.status = 'rejected') AS rejected,
+           SUM(t.thanked)             AS thanked,
+           SUM(EXISTS (SELECT 1 FROM ticket r
+                       WHERE r.reopened_from = t.id
+                         AND (r.reopen_score > 0 OR r.reopen_llm = 'same'))) AS reopened
     FROM ticket t
     WHERE t.closed_at >= :start AND t.closed_at < :endExclusive
       ${groupFilterTickets}

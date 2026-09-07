@@ -12,6 +12,9 @@ import { exportHelpReport } from "../lib/helpReport";
 
 const { RangePicker } = DatePicker;
 
+/** Whole-percent share, 0 when the denominator is empty. */
+const share = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
+
 export default function OperatorsPage() {
   const { message } = App.useApp();
   const { canExport } = useAuth();
@@ -55,6 +58,26 @@ export default function OperatorsPage() {
         ),
       },
       { title: "Отклонено", dataIndex: "rejected", sorter: (a, b) => a.rejected - b.rejected },
+      {
+        title: (
+          <Tooltip title="Доля закрытых этим оператором заявок, после которых клиент вернулся с той же проблемой">
+            Вернулись
+          </Tooltip>
+        ),
+        dataIndex: "reopened",
+        sorter: (a, b) => share(a.reopened, a.closed) - share(b.reopened, b.closed),
+        render: (v: number, row) => (row.closed > 0 ? `${v} (${share(v, row.closed)}%)` : "-"),
+      },
+      {
+        title: (
+          <Tooltip title="Закрытия, на которые клиент ответил благодарностью в течение 4 рабочих часов">
+            Благодарностей
+          </Tooltip>
+        ),
+        dataIndex: "thanked",
+        sorter: (a, b) => share(a.thanked, a.closed) - share(b.thanked, b.closed),
+        render: (v: number, row) => (row.closed > 0 ? `${v} (${share(v, row.closed)}%)` : "-"),
+      },
       { title: "Сообщений", dataIndex: "messages", sorter: (a, b) => a.messages - b.messages },
       { title: "Клиентов", dataIndex: "clients", sorter: (a, b) => a.clients - b.clients },
       {

@@ -1,6 +1,8 @@
 package com.temnet.temnet_parser.controller;
 
 import com.temnet.temnet_parser.dto.ChatMessage;
+import com.temnet.temnet_parser.dto.ChatParticipant;
+import com.temnet.temnet_parser.dto.ChatTicket;
 import com.temnet.temnet_parser.security.AccessControlService;
 import com.temnet.temnet_parser.security.AccessControlService.Area;
 import com.temnet.temnet_parser.service.ChatService;
@@ -42,12 +44,22 @@ public class ChatController {
         return chatService.history(start, end, accessControl.scope(groupName, Area.CHATS), user);
     }
 
-    /** Clients of the group who talked to support in the period, sorted. */
+    /** Clients of the group who talked to support in the period, freshest first. */
     @GetMapping("/chatlist")
-    public List<String> getParticipants(
+    public List<ChatParticipant> getParticipants(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam String groupName) {
         return chatService.participants(start, end, accessControl.scope(groupName, Area.CHATS));
+    }
+
+    /** The client's tickets overlapping the period - markers in the conversation. */
+    @GetMapping("/tickets")
+    public List<ChatTicket> getTickets(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam String groupName,
+            @RequestParam String user) {
+        return chatService.tickets(start, end, accessControl.scope(groupName, Area.CHATS), user);
     }
 }

@@ -9,7 +9,11 @@ import type {
   BacklogReport,
   Bucket,
   CategoryCount,
+  CategoryPoint,
   ChatMessage,
+  ChatParticipant,
+  ChatTicket,
+  ClientStat,
   Company,
   Group,
   HeatmapCell,
@@ -18,6 +22,7 @@ import type {
   MetricPoint,
   OpenTicket,
   OperatorStat,
+  PeriodSummary,
   ReopenPoint,
   ResolutionPoint,
   SlaPoint,
@@ -204,7 +209,11 @@ export const api = {
 
   /** Clients of the group that talked to support in the period (chat access). */
   getChatParticipants: (start: string, end: string, groupName: string) =>
-    getJson<string[]>("/chat/chatlist", { start, end, groupName }),
+    getJson<ChatParticipant[]>("/chat/chatlist", { start, end, groupName }),
+
+  /** One client's tickets overlapping the period, for the markers in the conversation. */
+  getChatTickets: (start: string, end: string, groupName: string, user: string) =>
+    getJson<ChatTicket[]>("/chat/tickets", { start, end, groupName, user }),
 
   getTimeseries: (start: string, end: string, bucket: Bucket, groupName?: string) =>
     getJson<MetricPoint[]>("/metrics/timeseries", {
@@ -261,6 +270,28 @@ export const api = {
 
   getCategories: (start: string, end: string, groupName?: string) =>
     getJson<CategoryCount[]>("/metrics/categories", {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getCategoryTimeseries: (start: string, end: string, bucket: Bucket, groupName?: string) =>
+    getJson<CategoryPoint[]>("/metrics/categories/timeseries", {
+      start,
+      end,
+      bucket,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getSummary: (start: string, end: string, groupName?: string) =>
+    getJson<PeriodSummary>("/metrics/summary", {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getClients: (start: string, end: string, groupName?: string) =>
+    getJson<ClientStat[]>("/metrics/clients", {
       start,
       end,
       ...(groupName ? { groupName } : {}),
