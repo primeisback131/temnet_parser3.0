@@ -14,6 +14,8 @@ import type {
   HeatmapCell,
   HelpAccount,
   HelpAccountReport,
+  LlmSettings,
+  LlmStatus,
   MetricPoint,
   OpenTicket,
   OperatorStat,
@@ -178,6 +180,14 @@ export const api = {
   /** Both starts return at once; the run itself is polled via getSyncStatus. */
   startSync: () => send<SyncRun>("/admin/sync", "POST"),
   startRebuild: () => send<SyncRun>("/admin/sync/rebuild", "POST"),
+
+  // ---- LLM classification (admins only) ----
+  getLlmStatus: () => getJson<LlmStatus>("/admin/llm"),
+  /** Saved settings apply to the next run; a 400 carries the validation message. */
+  updateLlmSettings: (body: LlmSettings) => send<LlmSettings>("/admin/llm/settings", "PUT", body),
+  resetLlmSettings: () => send<LlmSettings>("/admin/llm/settings", "DELETE"),
+  /** Only the classifiers, without a dump sync; polled via getLlmStatus / getSyncStatus. */
+  startLlmRun: () => send<SyncRun>("/admin/llm/run", "POST"),
 
   /** `area` picks which grant decides the list: metrics (default) or chats. */
   getGroups: (area: "metrics" | "chats" = "metrics") => getJson<Group[]>("/groups", { area }),

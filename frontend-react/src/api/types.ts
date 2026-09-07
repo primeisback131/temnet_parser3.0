@@ -244,14 +244,17 @@ export interface SyncSummary {
   fullRebuild: boolean;
   scannedRows: number;
   newMessages: number;
+  /** Reopen verdicts decided by the model this run. */
   llmClassified: number;
+  /** Problem categories assigned by the model this run. */
+  llmCategorized: number;
   watermark: number;
   durationMs: number;
 }
 
 /** Current (or last) sync run - polled while a rebuild is in flight. */
 export interface SyncRun {
-  kind: "scheduled" | "incremental" | "rebuild";
+  kind: "scheduled" | "incremental" | "rebuild" | "llm";
   startedBy: string;
   startedAt: string;
   finishedAt: string | null;
@@ -269,6 +272,82 @@ export interface SyncStatus {
   reopens: number;
   reopenLlm: { verdict: string; count: number }[];
   /** The configured cadence of the scheduled sync. */
+  syncIntervalSeconds: number;
+  run: SyncRun | null;
+}
+
+/** Runtime knobs of the LLM step; saved values override the environment. */
+export interface LlmSettings {
+  enabled: boolean;
+  categories: "other" | "all" | "off";
+  maxPerSync: number;
+  requestsPerMinute: number;
+  /** Fractions 0..1 of the subscription's 5-hour window (Claude CLI only). */
+  ceilingIdle: number;
+  ceilingBusy: number;
+  busyWindowMinutes: number;
+  model: string;
+}
+
+/** One classifier's last run. */
+export interface LlmStep {
+  at: string;
+  decided: number;
+  calls: number;
+  pausedReason: string | null;
+  error: string | null;
+}
+
+/** Claude CLI provider state; the http provider reports only its endpoint. */
+export interface LlmTelemetry {
+  loggedIn?: boolean;
+  authMethod?: string | null;
+  subscription?: string | null;
+  authError?: string | null;
+  authCheckedAt?: number | null;
+  /** 0..1 of the rolling 5-hour window, null when unknown or reset. */
+  fiveHourUtilization?: number | null;
+  fiveHourResetsAt?: number | null;
+  sevenDayUtilization?: number | null;
+  readingAt?: number | null;
+  ownerBusy?: boolean;
+  ceilingNow?: number;
+  overageSeen?: boolean;
+  pausedReason?: string | null;
+  command?: string;
+  endpoint?: string;
+  hasApiKey?: boolean;
+}
+
+export interface LlmStatus {
+  provider: { kind: "claude-cli" | "http" | "off"; configured: boolean; description: string };
+  settings: LlmSettings;
+  defaults: LlmSettings;
+  overriddenKeys: string[];
+  overrides: Record<string, { value: string; updatedAt: string | null; updatedBy: string | null }>;
+  telemetry: LlmTelemetry;
+  stats: {
+    lastRunAt: string | null;
+    reopens: LlmStep | null;
+    categories: LlmStep | null;
+    totalCalls: number;
+    totalReopensDecided: number;
+    totalCategoriesDecided: number;
+    averageCallMillis: number | null;
+    lastCallAt: string | null;
+  };
+  counters: {
+    reopens: { pending: number; same: number; new: number; heuristic: number };
+    categories: {
+      mode: "other" | "all" | "off";
+      pending: number;
+      openOther: number;
+      otherTotal: number;
+      ticketsTotal: number;
+      classified: number;
+      byCategory: { category: string; count: number }[];
+    };
+  };
   syncIntervalSeconds: number;
   run: SyncRun | null;
 }

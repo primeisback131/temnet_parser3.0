@@ -154,3 +154,16 @@ export function useSyncStatus() {
     refetchInterval: (query) => (query.state.data?.run?.running ? 2000 : false),
   });
 }
+
+/**
+ * The LLM step for the maintenance screen: counters, usage of the
+ * subscription window, last runs, settings. Polled quickly while a run is
+ * in flight (the counters move), slowly otherwise (the window resets on its own).
+ */
+export function useLlmStatus() {
+  return useQuery({
+    queryKey: ["llmStatus"],
+    queryFn: api.getLlmStatus,
+    refetchInterval: (query) => (query.state.data?.run?.running ? 3000 : 30000),
+  });
+}

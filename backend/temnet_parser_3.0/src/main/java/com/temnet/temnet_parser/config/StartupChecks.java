@@ -1,5 +1,6 @@
 package com.temnet.temnet_parser.config;
 
+import com.temnet.temnet_parser.analytics.LlmChat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,8 +25,7 @@ public class StartupChecks {
             @Value("${spring.datasource.password:}") String sourcePassword,
             @Value("${app.analytics.password:}") String analyticsPassword,
             @Value("${server.servlet.session.cookie.secure:false}") boolean secureCookie,
-            @Value("${app.llm.base-url:}") String llmBaseUrl,
-            @Value("${app.llm.api-key:}") String llmApiKey) {
+            LlmChat llmChat) {
         return args -> {
             if (DEFAULT_DB_PASSWORD.equals(sourcePassword) || DEFAULT_DB_PASSWORD.equals(analyticsPassword)) {
                 log.warn("Для базы данных используется пароль по умолчанию (root). "
@@ -34,12 +34,9 @@ public class StartupChecks {
             if (!secureCookie) {
                 log.info("Cookie сессии выдаётся без флага Secure. За HTTPS-прокси задайте SESSION_COOKIE_SECURE=true.");
             }
-            if (!llmBaseUrl.isBlank()) {
-                log.warn("LLM-классификация включена: тексты обращений клиентов передаются внешнему сервису {}.",
-                        llmBaseUrl);
-                if (llmApiKey.isBlank()) {
-                    log.warn("LLM_API_KEY не задан: запросы к LLM будут отклоняться, кандидаты останутся pending.");
-                }
+            if (llmChat.enabled()) {
+                log.warn("LLM-классификация включена ({}): тексты обращений клиентов передаются внешнему сервису.",
+                        llmChat.describe());
             }
         };
     }

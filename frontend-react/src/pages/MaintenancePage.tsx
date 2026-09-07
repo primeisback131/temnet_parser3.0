@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useSyncStatus } from "../api/queries";
 import type { SyncRun } from "../api/types";
+import LlmPanel from "../components/LlmPanel";
 import QueryError from "../components/QueryError";
 
 /** Typing this word is what arms the rebuild button - it is not undoable. */
@@ -26,7 +27,20 @@ const KIND_LABEL: Record<SyncRun["kind"], string> = {
   scheduled: "синхронизация по расписанию",
   incremental: "инкрементальная синхронизация",
   rebuild: "полная пересборка",
+  llm: "LLM-классификация",
 };
+
+/** What a running job of each kind is doing, for the progress banner. */
+function runDescription(run: SyncRun): string {
+  switch (run.kind) {
+    case "rebuild":
+      return `Запустил ${run.startedBy}. Данные собираются заново в теневых таблицах, до конца пересборки метрики и чаты показывают прежние данные. Страницу можно закрыть.`;
+    case "llm":
+      return `Запустил ${run.startedBy}. Модель решает повторные обращения и категории в пределах лимита вызовов. Страницу можно закрыть.`;
+    default:
+      return `Запустил ${run.startedBy}. Из дампа забираются новые сообщения. Страницу можно закрыть.`;
+  }
+}
 
 function formatDuration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
@@ -133,11 +147,7 @@ export default function MaintenancePage() {
           showIcon
           icon={<Spin size="small" />}
           message={`Идёт ${KIND_LABEL[run.kind]}, ${elapsed}`}
-          description={
-            run.kind === "rebuild"
-              ? `Запустил ${run.startedBy}. Данные собираются заново в теневых таблицах, до конца пересборки метрики и чаты показывают прежние данные. Страницу можно закрыть.`
-              : `Запустил ${run.startedBy}. Из дампа забираются новые сообщения. Страницу можно закрыть.`
-          }
+          description={runDescription(run)}
         />
       )}
 
@@ -157,13 +167,20 @@ export default function MaintenancePage() {
           message={`${KIND_LABEL[run.kind]} завершена за ${formatDuration(run.summary.durationMs)}`}
           description={
             <>
-              Строк дампа: {num(run.summary.scannedRows)}, новых сообщений:{" "}
-              {num(run.summary.newMessages)}, классифицировано LLM: {num(run.summary.llmClassified)}.
-              Завершено {dayjs(run.finishedAt).format("DD.MM.YYYY HH:mm:ss")}, запускал {run.startedBy}.
+              {run.kind !== "llm" && (
+                <>
+                  Строк дампа: {num(run.summary.scannedRows)}, новых сообщений: {num(run.summary.newMessages)},{" "}
+                </>
+              )}
+              решено LLM: повторов {num(run.summary.llmClassified)}, категорий{" "}
+              {num(run.summary.llmCategorized ?? 0)}. Завершено{" "}
+              {dayjs(run.finishedAt).format("DD.MM.YYYY HH:mm:ss")}, запускал {run.startedBy}.
             </>
           }
         />
       )}
+
+      <LlmPanel />
 
       <Card title="Обслуживание">
         <Space direction="vertical" size="middle" style={{ width: "100%" }}>
@@ -228,7 +245,7 @@ export default function MaintenancePage() {
                   заявки и сообщения собираются в теневых таблицах и подменяют текущие одним махом, до
                   этого момента метрики показывают прежние данные;
                 </li>
-                <li>вердикты LLM сохраняются, повторно они не запрашиваются.</li>
+                <li>вердикты и категории от LLM сохраняются, повторно они не запрашиваются.</li>
               </ul>
             }
           />

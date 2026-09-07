@@ -107,6 +107,30 @@ CREATE TABLE IF NOT EXISTS llm_verdict (
     PRIMARY KEY (client, opened_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Problem categories assigned by the LLM (for tickets the keyword dictionary
+-- left in «Другое», or for every ticket in `all` mode), keyed like
+-- llm_verdict so a rebuild re-applies them instead of asking again. The
+-- category name is stored, not the rank: the dictionary's order may change.
+CREATE TABLE IF NOT EXISTS llm_category (
+    client    VARCHAR(191) NOT NULL,
+    opened_at DATETIME NOT NULL,
+    category  VARCHAR(64) NOT NULL,
+    PRIMARY KEY (client, opened_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The verdict tables join tickets by their natural identity; this index
+-- serves those joins and the classifiers' candidate queries.
+ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_client_opened (client, opened_at);
+
+-- Settings changed at runtime from the maintenance screen (LLM limits and
+-- the like). They override the environment's defaults and survive restarts.
+CREATE TABLE IF NOT EXISTS app_setting (
+    name       VARCHAR(64) NOT NULL PRIMARY KEY,
+    value      VARCHAR(255) NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_by VARCHAR(191) NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Which client groups each help account serves, copied by the sync job from
 -- ejabberd's shared-roster configuration (sr_group.opts `displayed_groups`
 -- joined with the account's help group in sr_user). Grants of type

@@ -76,4 +76,14 @@ class CategoryRulesTest {
     void inflectedFormsStillMatch(String text, String expected) {
         assertThat(categoryOf(text)).isEqualTo(expected);
     }
+
+    @Test
+    void namesAndRanksRoundTrip() {
+        assertThat(CategoryRules.names()).startsWith("1С").endsWith(CategoryRules.OTHER).doesNotHaveDuplicates();
+        for (String name : CategoryRules.names()) {
+            assertThat(CategoryRules.nameOf(CategoryRules.rankOfName(name))).isEqualTo(name);
+        }
+        assertThat(CategoryRules.rankOfName("Печать")).isEqualTo(CategoryRules.rankOf("не печатает принтер"));
+        assertThat(CategoryRules.rankOfName("нет такой")).isEqualTo(CategoryRules.otherRank());
+    }
 }

@@ -41,7 +41,7 @@
 
 | Слой | Технологии |
 | --- | --- |
-| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`/`JdbcTemplate`), MariaDB JDBC, Caffeine (кэш метрик), Gradle (toolchain JDK 25); LLM-классификация reopen'ов — через OpenAI-совместимый HTTP API (java.net.http + Jackson) |
+| Backend | Java 25, Spring Boot 4, Spring Web MVC, Spring JDBC (`JdbcClient`/`JdbcTemplate`), MariaDB JDBC, Caffeine (кэш метрик), Gradle (toolchain JDK 25); LLM-классификация повторов и категорий — через локальный Claude Code CLI (`claude -p`, подписка) или OpenAI-совместимый HTTP API (java.net.http + Jackson) |
 | Frontend | React 19, Vite 5, TypeScript, Ant Design 5, TanStack Query, Apache ECharts, React Router, dayjs, ExcelJS |
 | БД | MariaDB: схема ejabberd (источник) + `temnet_analytics` (своя) |
 
@@ -119,6 +119,8 @@ temnet_parser_3.0/
 | `message` | одна строка на реальное сообщение диалога клиент ↔ поддержка: копии склеены (`dedup_hash`, UNIQUE), автор восстановлен, служебные строки отброшены |
 | `ticket` | заявка, собранная стейт-машиной инжеста: `open` → `closed`/`rejected` (фраза оператора) или `expired` (клиент замолчал); FRT и время решения — в рабочих секундах, посчитаны при инжесте |
 | `llm_verdict` | вердикты LLM по спорным reopen-кандидатам; ключ — (client, opened_at), поэтому полный пересбор не переплачивает за уже решённые случаи |
+| `llm_category` | категории, названные LLM (для заявок из «Другое» или всех в режиме `all`); ключ тот же, после пересборки применяются заново без вызовов модели |
+| `app_setting` | настройки, изменённые со страницы обслуживания (ключи `llm.*`): переопределяют переменные окружения и переживают перезапуск |
 | `client_group` | членство клиентов в группах, копия `sr_user` |
 | `help_account_group` | какие группы обслуживает каждый help-аккаунт; копия `displayed_groups` из `sr_group` ejabberd, обновляется при каждой синхронизации |
 | `app_user` | учётки приложения: логин, bcrypt-хеш, роль (`admin`/`manager`/`user`) |
@@ -164,7 +166,8 @@ temnet_parser_3.0/
 Запуски асинхронные: одновременно идёт не больше одного (второй получает
 `409`), ход дела отдаётся в `GET /admin/sync/status` полем `run`, страница
 опрашивает его раз в 2 секунды. Запуск по расписанию, пока идёт ручной,
-просто пропускается.
+просто пропускается. Третий вид запуска — `POST /admin/llm/run`: только
+LLM-классификаторы без чтения дампа, в том же единственном слоте.
 
 **Нормализация** (`normalizePairs`): служебные MAM-строки (пустой `txt`) и
 диалоги не-с-поддержкой отбрасываются. Две копии одного сообщения — одинаковый
@@ -193,17 +196,62 @@ SHA-1(client, stanza id, txt) и `INSERT IGNORE`; дальше в обработ
   +2 балла, совпадение категории +1; при нуле баллов кандидат помечается
   `reopen_llm = 'pending'` и уходит на LLM-классификацию.
 
-**LLM-классификация** ([`LlmReopenClassifier`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java)):
-спорным кандидатам модель отвечает SAME/NEW по текстам старой и новой заявки.
-Работает с любым OpenAI-совместимым chat-completions endpoint'ом
-(`app.llm.base-url` + `app.llm.api-key` + `app.llm.model`): Gemini free tier,
-Groq, OpenRouter, Anthropic, self-hosted — что угодно. **По умолчанию
-выключена** (base-url пуст): включение означает передачу текстов обращений
+**LLM-классификация.** Два классификатора над одним транспортом
+[`LlmChat`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmChat.java):
+
+- [`LlmReopenClassifier`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmReopenClassifier.java) —
+  спорным кандидатам в повторные модель отвечает SAME/NEW по текстам старой
+  и новой заявки; вердикты кэшируются в `llm_verdict`;
+- [`LlmCategoryClassifier`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmCategoryClassifier.java) —
+  заявкам, которые словарь оставил в «Другое» (или всем завершённым в режиме
+  `app.llm.categories=all`), модель называет категорию из списка
+  `CategoryRules`; ответы кэшируются в `llm_category`. Классифицируются только
+  завершённые заявки (закрытые, отклонённые, истёкшие или открытые с
+  прошедшим `stale_at`): категорию открытой заявки инжест ещё уточняет по
+  новым сообщениям и перезаписал бы ответ модели.
+
+Кэши ключуются по (client, opened_at) и применяются пакетно в начале
+каждого прогона, поэтому полная пересборка ничего не переспрашивает. Бюджет
+`app.llm.max-per-sync` (60 вызовов) общий на прогон: повторы идут первыми,
+но берут не больше двух третей, остаток и всё неиспользованное достаётся
+категориям. Вызовы идут параллельно, по `app.llm.concurrency` (4) за раз;
+темп `app.llm.requests-per-minute` (0 = без ограничения) нужен только
+провайдерам с лимитом в минуту. Остальное дорешивается в следующих прогонах.
+
+Всё настраиваемое на ходу (пауза, бюджет, темп, потолки окна, окно занятости,
+режим категорий, модель) собрано в [`LlmSettings`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmSettings.java):
+[`LlmSettingsService`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmSettingsService.java)
+накладывает сохранённые в `app_setting` значения на переменные окружения,
+транспорты и классификаторы читают их при каждом вызове.
+[`LlmRunStats`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmRunStats.java)
+помнит последние прогоны (решено, вызовов, причина паузы или ошибка) и итоги
+с запуска; `LlmChat.telemetry()` отдаёт состояние провайдера (для CLI: вход,
+подписка, загрузка окон 5 часов и 7 дней, занят ли владелец, текущий потолок).
+Всё это показывает блок LLM на странице обслуживания через
+[`LlmAdminController`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmAdminController.java).
+
+Транспорт выбирает [`LlmChatConfig`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/LlmChatConfig.java)
+по `app.llm.provider`:
+
+- `claude-cli` — [`ClaudeCliChat`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/ClaudeCliChat.java):
+  на каждый вызов запускается `claude -p` под учётной записью, вошедшей через
+  `claude auth login`, то есть на подписке владельца машины, а не по
+  API-ключу (`ANTHROPIC_API_KEY` из окружения дочернего процесса убирается
+  намеренно). Без инструментов, один ход, без сохранения сессии, thinking
+  выключен, настройки и MCP-серверы проекта не загружаются. Из потока
+  событий CLI читается загрузка 5-часового окна подписки; когда она выше
+  потолка, вызовы останавливаются до следующего прогона. Потолка два:
+  `ceiling-busy` (0.2), пока владелец работает с Claude Code (транскрипт
+  сессии в `~/.claude/projects` менялся за `busy-window`, 10 мин), и
+  `ceiling-idle` (0.5) в остальное время. Если CLI сообщает об использовании
+  платных usage credits, вызовы тоже останавливаются.
+- `http` — [`OpenAiCompatibleChat`](../backend/temnet_parser_3.0/src/main/java/com/temnet/temnet_parser/analytics/OpenAiCompatibleChat.java):
+  любой OpenAI-совместимый chat-completions endpoint (`app.llm.base-url` +
+  `app.llm.api-key` + `app.llm.model`): Gemini free tier, Groq, OpenRouter,
+  слой совместимости Anthropic, self-hosted.
+
+**По умолчанию выключена**: включение означает передачу текстов обращений
 клиентов внешнему сервису, о чём приложение предупреждает в логе при старте.
-Запросы идут с темпом `app.llm.requests-per-minute` (по умолчанию 20/мин) и
-не больше `app.llm.max-per-sync` (60) за прогон, чтобы LLM-часть укладывалась
-в интервал синхронизации; остальное дорешивается в следующих прогонах.
-Вердикты кэшируются в `llm_verdict`.
 
 ## 6. Backend
 
@@ -247,6 +295,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `ChatController` | `GET /chat` (`user?` — переписка одного клиента), `GET /chat/chatlist` (список клиентов) (админ + руководитель) |
 | `MetricsController` | `GET /metrics/{timeseries,backlog,heatmap,sla,resolution,reopens,alerts,categories,operators}` (админ + руководитель) |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` (только администратор) |
+| `LlmAdminController` (пакет `analytics/`) | `GET /admin/llm` (состояние, счётчики, телеметрия, настройки), `PUT`/`DELETE /admin/llm/settings`, `POST /admin/llm/run` (только администратор) |
 
 ### Авторизация и права
 
@@ -388,11 +437,18 @@ app.sync.interval=${SYNC_INTERVAL:PT5M}
 app.operator-prefix=${OPERATOR_PREFIX:help}
 app.time.source-zone=${SOURCE_TZ:}
 app.time.business-zone=${BUSINESS_TZ:}
+app.llm.provider=${LLM_PROVIDER:}
+app.llm.categories=${LLM_CATEGORIES:other}
+app.llm.max-per-sync=${LLM_MAX_PER_SYNC:60}
+app.llm.concurrency=${LLM_CONCURRENCY:4}
+app.llm.requests-per-minute=${LLM_RPM:0}
 app.llm.base-url=${LLM_BASE_URL:}
 app.llm.api-key=${LLM_API_KEY:}
 app.llm.model=${LLM_MODEL:meta-llama/llama-4-scout-17b-16e-instruct}
-app.llm.max-per-sync=${LLM_MAX_PER_SYNC:60}
-app.llm.requests-per-minute=${LLM_RPM:20}
+app.llm.claude-cli.model=${LLM_CLAUDE_MODEL:claude-haiku-4-5}
+app.llm.claude-cli.ceiling-idle=${LLM_CLAUDE_CEILING_IDLE:0.5}
+app.llm.claude-cli.ceiling-busy=${LLM_CLAUDE_CEILING_BUSY:0.2}
+app.llm.claude-cli.busy-window=${LLM_CLAUDE_BUSY_WINDOW:PT10M}
 app.cors.allowed-origin=${CORS_ORIGIN:}
 spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize=500
 ```
@@ -430,7 +486,7 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
 | `/users` | `UsersPage` — статистика пользователей |
 | `/operators` | `OperatorsPage` — лидерборд операторов |
 | `/admin/users` | `AdminUsersPage` — учётки и доступы (только администратор) |
-| `/admin/maintenance` | `MaintenancePage` — состояние базы аналитики, синхронизация и пересбор (только администратор) |
+| `/admin/maintenance` | `MaintenancePage` — состояние базы аналитики, синхронизация и пересбор; `LlmPanel` — состояние, счётчики, окно подписки, запуск и настройки LLM-классификации (только администратор) |
 
 ### Слой API (`api/`)
 

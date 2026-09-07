@@ -3,6 +3,7 @@ package com.temnet.temnet_parser.support;
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Keyword dictionary that classifies a request message into a problem
@@ -73,6 +74,21 @@ public final class CategoryRules {
     /** Category name for a rank produced by {@link #rankOf}. */
     public static String nameOf(int rank) {
         return rank >= 1 && rank <= CATEGORIES.size() ? CATEGORIES.get(rank - 1).name() : OTHER;
+    }
+
+    /** Rank of a category by its name; unknown names rank as «Другое». */
+    public static int rankOfName(String name) {
+        for (int i = 0; i < CATEGORIES.size(); i++) {
+            if (CATEGORIES.get(i).name().equals(name)) {
+                return i + 1;
+            }
+        }
+        return otherRank();
+    }
+
+    /** Every category name in priority order, «Другое» last. */
+    public static List<String> names() {
+        return Stream.concat(CATEGORIES.stream().map(Category::name), Stream.of(OTHER)).toList();
     }
 
 }

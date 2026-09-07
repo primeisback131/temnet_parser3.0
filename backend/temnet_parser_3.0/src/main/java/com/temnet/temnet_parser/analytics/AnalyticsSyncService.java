@@ -41,6 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -89,6 +90,8 @@ public class AnalyticsSyncService {
     private final TransactionTemplate tx;
     private final CacheManager cacheManager;
     private final LlmReopenClassifier llmClassifier;
+    private final LlmCategoryClassifier categoryClassifier;
+    private final LlmSettingsService llmSettings;
     private final String operatorPrefix;
     /**
      * Zone the dump's timestamps are written in and the zone the working
@@ -106,6 +109,8 @@ public class AnalyticsSyncService {
             JdbcTransactionManager analyticsTxManager,
             CacheManager cacheManager,
             LlmReopenClassifier llmClassifier,
+            LlmCategoryClassifier categoryClassifier,
+            LlmSettingsService llmSettings,
             @Value("${app.operator-prefix:help}") String operatorPrefix,
             @Value("${app.time.source-zone:}") String sourceZone,
             @Value("${app.time.business-zone:}") String businessZone) {
@@ -115,6 +120,8 @@ public class AnalyticsSyncService {
         this.tx = new TransactionTemplate(analyticsTxManager);
         this.cacheManager = cacheManager;
         this.llmClassifier = llmClassifier;
+        this.categoryClassifier = categoryClassifier;
+        this.llmSettings = llmSettings;
         this.operatorPrefix = operatorPrefix;
         this.sourceZone = zone(sourceZone);
         this.businessZone = zone(businessZone);
@@ -139,14 +146,20 @@ public class AnalyticsSyncService {
         return sourceTime.atZone(sourceZone).withZoneSameInstant(businessZone).toLocalDateTime();
     }
 
+    /**
+     * {@code llmClassified} = reopen verdicts decided this run,
+     * {@code llmCategorized} = categories assigned by the model this run.
+     */
     public record SyncSummary(boolean fullRebuild, long scannedRows, long newMessages, long llmClassified,
-                              long watermark, long durationMs) {
+                              long llmCategorized, long watermark, long durationMs) {
     }
 
     /** Kinds of run, as shown on the maintenance screen. */
     public static final String KIND_SCHEDULED = "scheduled";
     public static final String KIND_INCREMENTAL = "incremental";
     public static final String KIND_REBUILD = "rebuild";
+    /** Only the LLM classifiers, no dump sync. */
+    public static final String KIND_LLM = "llm";
 
     private static final String STARTED_BY_SCHEDULER = "по расписанию";
 
@@ -216,7 +229,7 @@ public class AnalyticsSyncService {
         }
         // Deliberately inline rather than on the executor: fixedDelay has to
         // measure from the end of a run, not from handing it off.
-        run(started, false);
+        run(started, () -> sync(false));
     }
 
     /** What the sync is doing right now, or how it last ended; null before the first run. */
@@ -234,7 +247,20 @@ public class AnalyticsSyncService {
      */
     public SyncRun startAsync(boolean rebuild, String startedBy) {
         SyncRun started = claim(rebuild ? KIND_REBUILD : KIND_INCREMENTAL, startedBy);
-        syncExecutor.execute(() -> run(started, rebuild));
+        syncExecutor.execute(() -> run(started, () -> sync(rebuild)));
+        return started;
+    }
+
+    /**
+     * Runs only the LLM classifiers on the current data, without touching
+     * the dump. Takes the same single run slot as a sync, so the two never
+     * classify the same candidates at once.
+     *
+     * @throws IllegalStateException if a run is already in flight
+     */
+    public SyncRun startClassificationAsync(String startedBy) {
+        SyncRun started = claim(KIND_LLM, startedBy);
+        syncExecutor.execute(() -> run(started, this::classifyOnly));
         return started;
     }
 
@@ -248,10 +274,10 @@ public class AnalyticsSyncService {
         return started;
     }
 
-    private void run(SyncRun started, boolean rebuild) {
+    private void run(SyncRun started, Supplier<SyncSummary> work) {
         SyncRun done;
         try {
-            done = started.finished(sync(rebuild), null);
+            done = started.finished(work.get(), null);
         } catch (Exception e) {
             log.error("{} sync failed", started.kind(), e);
             done = started.finished(null, e.getMessage() == null ? e.toString() : e.getMessage());
@@ -318,24 +344,61 @@ public class AnalyticsSyncService {
 
         syncGroups();
         syncHelpAccountGroups();
-        int llmClassified = llmClassifier.classifyPending();
+        int[] llm = classify();
         analytics.update(
                 "UPDATE sync_state SET last_run_at = NOW(), messages_total = (SELECT COUNT(*) FROM message m) WHERE id = 1");
 
-        if (full || inserted > 0 || llmClassified > 0) {
-            // Metric responses are cached; new data must show up immediately.
-            for (String name : cacheManager.getCacheNames()) {
-                Cache cache = cacheManager.getCache(name);
-                if (cache != null) {
-                    cache.clear();
-                }
-            }
+        if (full || inserted > 0 || llm[0] > 0 || llm[1] > 0) {
+            clearMetricCaches();
         }
 
-        SyncSummary summary = new SyncSummary(full, scanned, inserted, llmClassified, watermark,
+        SyncSummary summary = new SyncSummary(full, scanned, inserted, llm[0], llm[1], watermark,
                 System.currentTimeMillis() - startedAt);
         log.info("Sync done: {}", summary);
         return summary;
+    }
+
+    /** The LLM step alone, for the maintenance screen's "classify now". */
+    public synchronized SyncSummary classifyOnly() {
+        long startedAt = System.currentTimeMillis();
+        long watermark = analytics.queryForObject("SELECT last_archive_id FROM sync_state WHERE id = 1", Long.class);
+        int[] llm = classify();
+        if (llm[0] > 0 || llm[1] > 0) {
+            clearMetricCaches();
+        }
+        SyncSummary summary = new SyncSummary(false, 0, 0, llm[0], llm[1], watermark,
+                System.currentTimeMillis() - startedAt);
+        log.info("LLM classification done: {}", summary);
+        return summary;
+    }
+
+    /**
+     * Both classifiers within one run's budget: {reopens decided, categories
+     * decided}. Reopens go first — each verdict moves a metric — but take at
+     * most two thirds of the budget, so a long backlog of candidates cannot
+     * starve the categories for days; whatever reopens leave unused passes
+     * on to the categories. Nothing runs while the pause switch is off.
+     */
+    private int[] classify() {
+        LlmSettings settings = llmSettings.current();
+        if (!settings.enabled()) {
+            return new int[]{0, 0};
+        }
+        int budget = settings.maxPerSync();
+        int reopenBudget = (budget * 2 + 2) / 3;
+        LlmReopenClassifier.Result reopens = llmClassifier.classifyPending(reopenBudget);
+        LlmCategoryClassifier.Result categories = categoryClassifier.classifyPending(budget - reopens.calls());
+        return new int[]{reopens.decided(), categories.decided()};
+    }
+
+    /** Metric responses are cached; new data must show up immediately. */
+    private void clearMetricCaches() {
+        for (String name : cacheManager.getCacheNames()) {
+            Cache cache = cacheManager.getCache(name);
+            if (cache != null) {
+                cache.clear();
+            }
+        }
     }
 
     /** Next batch of raw archive rows after the watermark, oldest first. */
