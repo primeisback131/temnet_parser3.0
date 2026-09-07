@@ -35,11 +35,17 @@ public class LlmReopenClassifier {
 
     static final String SYSTEM_PROMPT = """
             Ты — классификатор обращений в службу технической поддержки.
-            Тебе дают тексты предыдущей (уже закрытой) заявки клиента и его нового обращения,
-            отправленного вскоре после закрытия. Определи, является ли новое обращение
-            продолжением той же проблемы (повторное обращение по тому же вопросу) или это
-            другая, новая проблема.
-            Ответь строго одним словом: SAME — та же проблема, NEW — другая проблема.""";
+            Тебе дают последние сообщения клиента из предыдущей (уже закрытой) заявки и его новое
+            обращение, отправленное вскоре после закрытия. Определи, вернулась ли ТА ЖЕ САМАЯ
+            проблема: то, что в предыдущей заявке считалось решённым, не сработало или сломалось снова.
+            SAME — только если речь о том же самом объекте (тот же пациент, документ, номер, принтер,
+            учётная запись, компьютер) и той же неисправности: «не помогло», «опять не печатает»,
+            «снова не заходит».
+            NEW — во всех остальных случаях, в том числе когда тема та же, но объект другой:
+            другой пациент или номер, другой документ, другой принтер, ещё одна карта, новая
+            учётная запись. Однотипная работа по новому случаю — это новая заявка, а не повтор.
+            Если сомневаешься — NEW.
+            Ответь строго одним словом: SAME или NEW.""";
 
     private final JdbcTemplate analytics;
     private final LlmChat chat;
@@ -63,13 +69,12 @@ public class LlmReopenClassifier {
     }
 
     /**
-     * Re-applies cached verdicts, then classifies up to {@code budget}
-     * pending candidates with the provider.
+     * Writes cached verdicts back onto pending candidates. A rebuild recreates
+     * every ticket as pending; this is a plain DB update that costs nothing,
+     * so it runs on every sync whether or not the provider is enabled - a
+     * paused LLM must not make paid verdicts vanish from the metrics.
      */
-    public Result classifyPending(int budget) {
-        if (!chat.enabled()) {
-            return Result.NONE;
-        }
+    public int restoreCached() {
         int restored = analytics.update("""
                 UPDATE ticket t
                 JOIN llm_verdict v ON v.client = t.client AND v.opened_at = t.opened_at
@@ -79,7 +84,12 @@ public class LlmReopenClassifier {
         if (restored > 0) {
             log.info("LLM reopen verdicts restored from cache: {}", restored);
         }
-        if (budget <= 0) {
+        return restored;
+    }
+
+    /** Classifies up to {@code budget} pending candidates with the provider. */
+    public Result classifyPending(int budget) {
+        if (!chat.enabled() || budget <= 0) {
             return Result.NONE;
         }
 
@@ -118,7 +128,9 @@ public class LlmReopenClassifier {
     }
 
     private String classify(Candidate candidate) throws Exception {
-        String previousTexts = TicketTexts.inbound(analytics, candidate.client(),
+        // The END of the previous ticket is what the closure resolved; its
+        // opening message may be days and several topics away.
+        String previousTexts = TicketTexts.inboundLast(analytics, candidate.client(),
                 candidate.prevOpened(), candidate.prevClosed());
         String newTexts = TicketTexts.inbound(analytics, candidate.client(), candidate.openedAt(), null);
 
@@ -129,8 +141,15 @@ public class LlmReopenClassifier {
         return parseVerdict(answer);
     }
 
-    /** Anything unparseable counts as NEW: conservative (not a reopen) and final. */
+    /**
+     * The verdict is the FIRST word of the answer; anything else - including
+     * "NEW, it is not the SAME issue" - counts as NEW: conservative and final.
+     */
     static String parseVerdict(String answer) {
-        return answer != null && answer.toUpperCase().contains("SAME") ? "same" : "new";
+        if (answer == null) {
+            return "new";
+        }
+        String first = answer.strip().split("\\s+", 2)[0].replaceAll("^\\P{L}+|\\P{L}+$", "");
+        return first.equalsIgnoreCase("SAME") ? "same" : "new";
     }
 }

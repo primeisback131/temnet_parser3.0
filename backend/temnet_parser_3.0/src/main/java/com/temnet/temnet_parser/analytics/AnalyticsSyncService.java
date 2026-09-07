@@ -380,6 +380,13 @@ public class AnalyticsSyncService {
      * on to the categories. Nothing runs while the pause switch is off.
      */
     private int[] classify() {
+        // Cached answers come back first, and regardless of the pause switch:
+        // after a rebuild the metrics must not lose paid verdicts because the
+        // provider happens to be off.
+        int restored = llmClassifier.restoreCached() + categoryClassifier.restoreCached();
+        if (restored > 0) {
+            clearMetricCaches();
+        }
         LlmSettings settings = llmSettings.current();
         if (!settings.enabled()) {
             return new int[]{0, 0};

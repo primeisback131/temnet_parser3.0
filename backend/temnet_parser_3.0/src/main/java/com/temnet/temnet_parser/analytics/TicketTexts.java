@@ -24,18 +24,36 @@ final class TicketTexts {
      * end when {@code to} is null), oldest first, capped for token cost.
      */
     static String inbound(JdbcTemplate analytics, String client, LocalDateTime from, LocalDateTime to) {
-        List<Map<String, Object>> rows = to == null
+        return join(select(analytics, client, from, to, "ASC"));
+    }
+
+    /**
+     * The LAST inbound messages of a closed ticket, oldest first. A ticket
+     * that ran for days is judged by what its closure actually resolved, not
+     * by how it started.
+     */
+    static String inboundLast(JdbcTemplate analytics, String client, LocalDateTime from, LocalDateTime to) {
+        List<Map<String, Object>> rows = new java.util.ArrayList<>(select(analytics, client, from, to, "DESC"));
+        java.util.Collections.reverse(rows);
+        return join(rows);
+    }
+
+    private static List<Map<String, Object>> select(JdbcTemplate analytics, String client, LocalDateTime from,
+                                                    LocalDateTime to, String order) {
+        return to == null
                 ? analytics.queryForList("""
                         SELECT txt FROM message
                         WHERE client = ? AND direction = 'in' AND created_at >= ?
-                        ORDER BY created_at LIMIT %d
-                        """.formatted(MAX_MESSAGES), client, Timestamp.valueOf(from))
+                        ORDER BY created_at %s LIMIT %d
+                        """.formatted(order, MAX_MESSAGES), client, Timestamp.valueOf(from))
                 : analytics.queryForList("""
                         SELECT txt FROM message
                         WHERE client = ? AND direction = 'in' AND created_at BETWEEN ? AND ?
-                        ORDER BY created_at LIMIT %d
-                        """.formatted(MAX_MESSAGES), client, Timestamp.valueOf(from), Timestamp.valueOf(to));
+                        ORDER BY created_at %s LIMIT %d
+                        """.formatted(order, MAX_MESSAGES), client, Timestamp.valueOf(from), Timestamp.valueOf(to));
+    }
 
+    private static String join(List<Map<String, Object>> rows) {
         StringBuilder sb = new StringBuilder();
         for (Map<String, Object> row : rows) {
             String txt = String.valueOf(row.get("txt"));

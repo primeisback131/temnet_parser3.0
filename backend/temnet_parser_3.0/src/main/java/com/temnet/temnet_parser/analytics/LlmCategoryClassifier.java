@@ -123,22 +123,29 @@ public class LlmCategoryClassifier {
     }
 
     /**
-     * Re-applies cached answers, then classifies up to {@code budget}
-     * unclassified finished tickets with the provider.
+     * Writes cached answers back onto tickets (a rebuild gives every ticket
+     * the dictionary's category again). Free, so it runs on every sync
+     * whether or not the provider is enabled; only mode OFF keeps the dictionary.
      */
-    public Result classifyPending(int budget) {
-        if (!chat.enabled()) {
-            return Result.NONE;
-        }
+    public int restoreCached() {
         Mode mode = parseMode(settings.current().categories());
         if (mode == Mode.OFF) {
-            return Result.NONE;
+            return 0;
         }
         int restored = applyCached(mode);
         if (restored > 0) {
             log.info("LLM categories restored from cache: {}", restored);
         }
-        if (budget <= 0) {
+        return restored;
+    }
+
+    /** Classifies up to {@code budget} unclassified finished tickets with the provider. */
+    public Result classifyPending(int budget) {
+        if (!chat.enabled() || budget <= 0) {
+            return Result.NONE;
+        }
+        Mode mode = parseMode(settings.current().categories());
+        if (mode == Mode.OFF) {
             return Result.NONE;
         }
 
