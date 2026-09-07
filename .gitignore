@@ -4,6 +4,8 @@ dist/
 dist-ssr/
 *.local
 .vite/
+test-results/
+playwright-report/
 
 # ── Gradle / Java (backend) ──
 .gradle/

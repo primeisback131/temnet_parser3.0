@@ -5,10 +5,13 @@ import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
+import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
@@ -41,6 +44,9 @@ public class MetricsRepository {
     private static final String REOPENS_SQL = SqlLoader.load("sql/reopens.sql");
     private static final String BACKLOG_SQL = SqlLoader.load("sql/backlog.sql");
     private static final String BACKLOG_TICKETS_SQL = SqlLoader.load("sql/backlog_tickets.sql");
+    private static final String SUMMARY_SQL = SqlLoader.load("sql/summary.sql");
+    private static final String CLIENTS_SQL = SqlLoader.load("sql/clients.sql");
+    private static final String CATEGORY_TIMESERIES_SQL = SqlLoader.load("sql/category_timeseries.sql");
 
 
     // Outlier guards, in WORKING seconds (must match the 10-hour business day
@@ -48,6 +54,15 @@ public class MetricsRepository {
     // over five working days are treated as mis-pairings and dropped.
     private static final int MAX_FRT_SECONDS = 10 * 3600;
     private static final int MAX_RESOLUTION_SECONDS = 5 * 10 * 3600;
+
+    // Service-level thresholds the summary reports compliance against: a
+    // first reply within 15 minutes / one hour, a closure within one working day.
+    private static final int FAST_REPLY_SECONDS = 15 * 60;
+    private static final int HOUR_REPLY_SECONDS = 3600;
+    private static final int DAY_RESOLUTION_SECONDS = 10 * 3600;
+
+    /** Rows of the frequent-clients list; enough to spot the pattern, not a report. */
+    private static final int TOP_CLIENTS = 20;
 
     // Anomaly thresholds: a group alerts on >= 2x its weekly message baseline
     // (with a volume floor to skip tiny groups) or >= 2x its average first
@@ -146,13 +161,59 @@ public class MetricsRepository {
                 .query(new DataClassRowMapper<>(ResolutionPoint.class)).list();
     }
 
-    /** Ticket counts per problem category. */
-    public List<CategoryCount> categories(LocalDate start, LocalDate end, Scope scope) {
+    /**
+     * Quality summary of the tickets opened in the period (outcomes, unanswered,
+     * threshold compliance, weight, thanks, handoffs, new clients) plus the
+     * off-hours share of incoming messages. Always exactly one row.
+     */
+    public PeriodSummary summary(LocalDate start, LocalDate end, Scope scope) {
 
-        String sql = CATEGORIES_SQL.replace("${groupFilter}", ScopeSql.tickets("t", scope));
+        String sql = SUMMARY_SQL
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope))
+                .replace("${membershipMessages}", ScopeSql.messages("m", scope));
 
         return withRange(sql, start, end, scope)
+                .param("maxFrtSeconds", MAX_FRT_SECONDS)
+                .param("fastReplySeconds", FAST_REPLY_SECONDS)
+                .param("hourReplySeconds", HOUR_REPLY_SECONDS)
+                .param("maxResolutionSeconds", MAX_RESOLUTION_SECONDS)
+                .param("dayResolutionSeconds", DAY_RESOLUTION_SECONDS)
+                .query(new DataClassRowMapper<>(PeriodSummary.class)).single();
+    }
+
+    /** Clients with the most tickets opened in the period. */
+    public List<ClientStat> clients(LocalDate start, LocalDate end, Scope scope) {
+
+        String sql = CLIENTS_SQL.replace("${groupFilter}", ScopeSql.tickets("t", scope));
+
+        return withRange(sql, start, end, scope)
+                .param("limit", TOP_CLIENTS)
+                .query(new DataClassRowMapper<>(ClientStat.class)).list();
+    }
+
+    /** Ticket counts per problem category, with the category's typical cost. */
+    public List<CategoryCount> categories(LocalDate start, LocalDate end, Scope scope) {
+
+        String sql = CATEGORIES_SQL
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope));
+
+        return withRange(sql, start, end, scope)
+                .param("maxFrtSeconds", MAX_FRT_SECONDS)
+                .param("maxResolutionSeconds", MAX_RESOLUTION_SECONDS)
                 .query(new DataClassRowMapper<>(CategoryCount.class)).list();
+    }
+
+    /** Tickets per category per time bucket (by opening date). */
+    public List<CategoryPoint> categoryTimeseries(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
+
+        String sql = CATEGORY_TIMESERIES_SQL
+                .replace("${bucket}", bucket.expression("t.opened_at"))
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope));
+
+        return withRange(sql, start, end, scope)
+                .query(new DataClassRowMapper<>(CategoryPoint.class)).list();
     }
 
     /** Per-operator leaderboard for the period (optionally limited to a group's clients). */

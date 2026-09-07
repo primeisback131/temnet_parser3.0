@@ -5,10 +5,13 @@ import com.temnet.temnet_parser.dto.AlertsReport;
 import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
+import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
+import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
@@ -111,6 +114,32 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.categories(start, end, scope);
+    }
+
+    @Cacheable("categoryTimeseries")
+    public List<CategoryPoint> categoryTimeseries(LocalDate start, LocalDate end, Scope scope, Bucket bucket) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.categoryTimeseries(start, end, scope, bucket);
+    }
+
+    /** Quality summary of the tickets opened in the period. */
+    @Cacheable("summary")
+    public PeriodSummary summary(LocalDate start, LocalDate end, Scope scope) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.summary(start, end, scope);
+    }
+
+    /** Clients with the most tickets in the period. */
+    @Cacheable("clients")
+    public List<ClientStat> clients(LocalDate start, LocalDate end, Scope scope) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.clients(start, end, scope);
     }
 
     @Cacheable("operators")

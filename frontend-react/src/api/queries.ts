@@ -54,6 +54,15 @@ export function useChatParticipants(start: string, end: string, groupName: strin
   });
 }
 
+/** The selected client's tickets, for the markers between messages. */
+export function useChatTickets(start: string, end: string, groupName: string | null, user: string | null) {
+  return useQuery({
+    queryKey: ["chatTickets", start, end, groupName, user],
+    queryFn: () => api.getChatTickets(start, end, groupName!, user!),
+    enabled: Boolean(groupName) && Boolean(user),
+  });
+}
+
 export function useTimeseries(
   start: string,
   end: string,
@@ -132,6 +141,34 @@ export function useCategories(start: string, end: string, groupName: string | nu
   return useQuery({
     queryKey: ["categories", start, end, groupName],
     queryFn: () => api.getCategories(start, end, groupName ?? undefined),
+  });
+}
+
+export function useCategoryTimeseries(
+  start: string,
+  end: string,
+  bucket: Bucket,
+  groupName: string | null,
+) {
+  return useQuery({
+    queryKey: ["categoryTimeseries", start, end, bucket, groupName],
+    queryFn: () => api.getCategoryTimeseries(start, end, bucket, groupName ?? undefined),
+  });
+}
+
+/** Quality summary of the tickets opened in the period. */
+export function useSummary(start: string, end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["summary", start, end, groupName],
+    queryFn: () => api.getSummary(start, end, groupName ?? undefined),
+  });
+}
+
+/** Clients with the most tickets in the period. */
+export function useClients(start: string, end: string, groupName: string | null) {
+  return useQuery({
+    queryKey: ["clients", start, end, groupName],
+    queryFn: () => api.getClients(start, end, groupName ?? undefined),
   });
 }
 

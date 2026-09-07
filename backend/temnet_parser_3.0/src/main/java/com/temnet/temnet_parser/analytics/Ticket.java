@@ -14,6 +14,7 @@ class Ticket {
     String firstResponder;
     Long frtSeconds;
     LocalDateTime inProgressAt;
+    Long pickupSeconds;
     LocalDateTime closedAt;
     String closedBy;
     Long resolutionSeconds;
@@ -24,6 +25,10 @@ class Ticket {
     Long reopenedFrom;
     int reopenScore;
     String reopenLlm;
+    boolean thanked;
+    LocalDateTime awaitingSince;
+    int replies;
+    long replySeconds;
 
     Ticket(String client, LocalDateTime openedAt) {
         this.client = client;

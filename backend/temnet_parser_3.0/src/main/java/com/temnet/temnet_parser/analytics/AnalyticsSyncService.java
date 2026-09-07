@@ -722,6 +722,9 @@ public class AnalyticsSyncService {
             if (st.open != null) {
                 st.open.messagesIn++;
                 st.open.lastActivity = m.createdAt();
+                if (st.open.awaitingSince == null) {
+                    st.open.awaitingSince = m.createdAt();
+                }
                 int rank = CategoryRules.rankOf(m.txt());
                 if (rank < st.open.categoryRank) {
                     st.open.categoryRank = rank;
@@ -735,6 +738,8 @@ public class AnalyticsSyncService {
             if (st.lastClosed != null
                     && ReopenSignals.isAck(m.txt())
                     && BusinessTime.secondsBetween(st.lastClosed.closedAt, m.createdAt()) <= ACK_WINDOW_SECONDS) {
+                st.lastClosed.thanked = true;
+                dirty.add(st.lastClosed);
                 return;
             }
 
@@ -775,10 +780,17 @@ public class AnalyticsSyncService {
                 st.open.firstResponseAt = m.createdAt();
                 st.open.firstResponder = m.author();
                 st.open.frtSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
+            } else if (st.open.awaitingSince != null) {
+                // A reply to a waiting client: the wait counts once, from their
+                // oldest unanswered message, not once per message.
+                st.open.replies++;
+                st.open.replySeconds += BusinessTime.secondsBetween(st.open.awaitingSince, m.createdAt());
             }
+            st.open.awaitingSince = null;
             if (st.open.inProgressAt == null
                     && (lower.contains("заявка в работе") || lower.contains("в работе заявка"))) {
                 st.open.inProgressAt = m.createdAt();
+                st.open.pickupSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
             }
             String closingStatus = ClosurePhrase.statusOf(m.txt());
             if (closingStatus != null) {
@@ -808,8 +820,9 @@ public class AnalyticsSyncService {
         private Ticket latest(String client, String statusFilter, String orderBy) {
             List<Ticket> found = analytics.query(
                     "SELECT id, client, account, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
-                            + " in_progress_at, closed_at, closed_by, resolution_seconds, status, category_rank,"
-                            + " messages_in, messages_out, reopened_from, reopen_score, reopen_llm"
+                            + " in_progress_at, pickup_seconds, closed_at, closed_by, resolution_seconds, status,"
+                            + " category_rank, messages_in, messages_out, reopened_from, reopen_score, reopen_llm,"
+                            + " thanked, awaiting_since, replies, reply_seconds"
                             + " FROM " + tables.ticket() + " WHERE client = ? AND " + statusFilter
                             + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
                     (rs, i) -> {
@@ -822,6 +835,8 @@ public class AnalyticsSyncService {
                         long frt = rs.getLong("frt_seconds");
                         t.frtSeconds = rs.wasNull() ? null : frt;
                         t.inProgressAt = toLocal(rs.getTimestamp("in_progress_at"));
+                        long pickup = rs.getLong("pickup_seconds");
+                        t.pickupSeconds = rs.wasNull() ? null : pickup;
                         t.closedAt = toLocal(rs.getTimestamp("closed_at"));
                         t.closedBy = rs.getString("closed_by");
                         long resolution = rs.getLong("resolution_seconds");
@@ -834,6 +849,10 @@ public class AnalyticsSyncService {
                         t.reopenedFrom = rs.wasNull() ? null : reopenedFrom;
                         t.reopenScore = rs.getInt("reopen_score");
                         t.reopenLlm = rs.getString("reopen_llm");
+                        t.thanked = rs.getBoolean("thanked");
+                        t.awaitingSince = toLocal(rs.getTimestamp("awaiting_since"));
+                        t.replies = rs.getInt("replies");
+                        t.replySeconds = rs.getLong("reply_seconds");
                         return t;
                     },
                     client);
@@ -848,8 +867,9 @@ public class AnalyticsSyncService {
                                                 first_response_at, first_responder, frt_seconds, in_progress_at,
                                                 closed_at, closed_by, resolution_seconds, status, category,
                                                 category_rank, messages_in, messages_out, reopened_from,
-                                                reopen_score, reopen_llm)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                reopen_score, reopen_llm, pickup_seconds, thanked,
+                                                awaiting_since, replies, reply_seconds)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """.formatted(tables.ticket()),
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -865,7 +885,9 @@ public class AnalyticsSyncService {
                                               first_responder = ?, frt_seconds = ?, in_progress_at = ?,
                                               closed_at = ?, closed_by = ?, resolution_seconds = ?, status = ?,
                                               category = ?, category_rank = ?, messages_in = ?, messages_out = ?,
-                                              reopened_from = ?, reopen_score = ?, reopen_llm = ?
+                                              reopened_from = ?, reopen_score = ?, reopen_llm = ?,
+                                              pickup_seconds = ?, thanked = ?, awaiting_since = ?,
+                                              replies = ?, reply_seconds = ?
                                 WHERE id = ?
                                 """.formatted(tables.ticket()),
                         Timestamp.valueOf(t.lastActivity),
@@ -885,6 +907,11 @@ public class AnalyticsSyncService {
                         t.reopenedFrom,
                         t.reopenScore,
                         t.reopenLlm,
+                        t.pickupSeconds,
+                        t.thanked,
+                        toTimestamp(t.awaitingSince),
+                        t.replies,
+                        t.replySeconds,
                         t.id);
             }
             dirty.clear();
@@ -911,6 +938,11 @@ public class AnalyticsSyncService {
             setNullableLong(ps, 18, t.reopenedFrom);
             ps.setInt(19, t.reopenScore);
             ps.setString(20, t.reopenLlm);
+            setNullableLong(ps, 21, t.pickupSeconds);
+            ps.setBoolean(22, t.thanked);
+            ps.setTimestamp(23, toTimestamp(t.awaitingSince));
+            ps.setInt(24, t.replies);
+            ps.setLong(25, t.replySeconds);
         }
 
         /**

@@ -1,7 +1,8 @@
 # CI: запускается на каждый push любой ветки и на pull request.
 # Backend: юнит-тесты + интеграционный тест старта Spring-контекста
 # (ему нужна живая MariaDB — поднимается сервис-контейнером).
-# Frontend: типо-проверка tsc + production-сборка Vite.
+# Frontend: типо-проверка tsc + production-сборка Vite + смоук собранного
+# бандла в Chromium (Playwright, API замокан).
 name: CI
 
 on:
@@ -80,3 +81,9 @@ jobs:
 
       - name: Type-check and build
         run: npm run build
+
+      - name: Install Chromium for the smoke test
+        run: npx playwright install --with-deps chromium
+
+      - name: Smoke test through the entry point
+        run: npx playwright test

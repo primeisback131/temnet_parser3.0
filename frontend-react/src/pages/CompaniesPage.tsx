@@ -11,6 +11,10 @@ import { exportToExcel } from "../lib/excel";
 
 const { RangePicker } = DatePicker;
 
+/** Tickets of the period per active member of the group. */
+const perActive = (c: Company) =>
+  c.activeUsers > 0 ? (c.closedRequests + c.rejectedRequests + c.openRequests) / c.activeUsers : 0;
+
 const columns: ColumnsType<Company> = [
   { title: "Имя группы", dataIndex: "groupName", sorter: (a, b) => a.groupName.localeCompare(b.groupName) },
   { title: "Активные пользователи", dataIndex: "activeUsers", sorter: (a, b) => a.activeUsers - b.activeUsers },
@@ -19,6 +23,16 @@ const columns: ColumnsType<Company> = [
   { title: "Отклоненных заявок", dataIndex: "rejectedRequests", sorter: (a, b) => a.rejectedRequests - b.rejectedRequests },
   { title: "Открытых на конец периода", dataIndex: "openRequests", sorter: (a, b) => a.openRequests - b.openRequests },
   { title: "Всего сообщений", dataIndex: "totalMessages", sorter: (a, b) => a.totalMessages - b.totalMessages },
+  {
+    title: (
+      <Tooltip title="Закрытые, отклонённые и открытые заявки на одного активного пользователя. Сравнивает нагрузку групп разного размера">
+        Заявок на активного
+      </Tooltip>
+    ),
+    key: "perActive",
+    sorter: (a, b) => perActive(a) - perActive(b),
+    render: (_: unknown, c: Company) => perActive(c).toFixed(1),
+  },
 ];
 
 /** The table as an Excel sheet, with the same Russian headers the screen shows. */
@@ -31,6 +45,7 @@ function companyRows(rows: Company[]) {
     "Отклоненных заявок": c.rejectedRequests,
     "Открытых на конец периода": c.openRequests,
     "Всего сообщений": c.totalMessages,
+    "Заявок на активного": +perActive(c).toFixed(1),
   }));
 }
 

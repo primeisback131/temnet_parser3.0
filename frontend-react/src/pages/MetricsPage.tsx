@@ -1,9 +1,15 @@
 import {
   CheckCircleOutlined,
+  FieldTimeOutlined,
   FileExcelOutlined,
+  HourglassOutlined,
   InboxOutlined,
+  LikeOutlined,
   MessageOutlined,
+  MoonOutlined,
+  QuestionCircleOutlined,
   StopOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
   Button,
@@ -21,7 +27,7 @@ import {
   Tooltip,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { EChartsOption, LineSeriesOption } from "echarts";
+import type { BarSeriesOption, EChartsOption, LineSeriesOption } from "echarts";
 import dayjs from "dayjs";
 import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
@@ -31,14 +37,17 @@ import {
   useBacklog,
   useBacklogTickets,
   useCategories,
+  useCategoryTimeseries,
+  useClients,
   useGroups,
   useHeatmap,
   useReopens,
   useResolution,
   useSla,
+  useSummary,
   useTimeseries,
 } from "../api/queries";
-import type { Bucket, OpenTicket } from "../api/types";
+import type { Bucket, CategoryCount, ClientStat, OpenTicket } from "../api/types";
 import EChart from "../components/EChart";
 import QueryError from "../components/QueryError";
 import StatCard from "../components/StatCard";
@@ -53,6 +62,31 @@ import { useThemeMode } from "../theme";
 const { RangePicker } = DatePicker;
 
 const BUCKET_NOUN: Record<Bucket, string> = { day: "день", week: "неделю", month: "месяц" };
+
+/** Whole-percent share; null when there is nothing to divide by. */
+function pct(part: number | undefined, whole: number | undefined): number | null {
+  return whole && whole > 0 ? Math.round(((part ?? 0) / whole) * 100) : null;
+}
+
+/** What the category bars measure; requests is the default view. */
+type CategoryMode = "requests" | "frt" | "resolution" | "messages" | "reopens";
+const CATEGORY_VALUE: Record<CategoryMode, (c: CategoryCount) => number> = {
+  requests: (c) => c.requests,
+  frt: (c) => +((c.p50FrtSeconds ?? 0) / 60).toFixed(1),
+  resolution: (c) => +((c.p50ResolutionSeconds ?? 0) / 3600).toFixed(1),
+  messages: (c) => +c.avgMessages.toFixed(1),
+  reopens: (c) => pct(c.reopens, c.requests) ?? 0,
+};
+const CATEGORY_UNIT: Record<CategoryMode, string> = {
+  requests: "заявок",
+  frt: "мин до первого ответа (медиана)",
+  resolution: "раб. ч до закрытия (медиана)",
+  messages: "сообщений на заявку",
+  reopens: "% повторных",
+};
+
+/** How many top categories get their own series in the trend chart; the rest are pooled. */
+const TREND_TOP = 6;
 
 /** Line series with the app's stroke weight and hover behaviour. */
 function line(
@@ -107,6 +141,7 @@ export default function MetricsPage() {
   const [group, setGroup] = useState<string | null>(null);
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
+  const [categoryMode, setCategoryMode] = useState<CategoryMode>("requests");
   const c = chartColors(mode);
   // Below this the legend of a two-axis chart spans the full width and would
   // run into the axis names sitting in the top corners, so those are dropped
@@ -129,6 +164,17 @@ export default function MetricsPage() {
   } = useResolution(startStr, endStr, bucket, group);
   const { data: reopens = [], isFetching: reopensLoading, error: reopensError } = useReopens(startStr, endStr, bucket, group);
   const { data: alertsReport, error: alertsError } = useAlerts();
+  const { data: summary, error: summaryError } = useSummary(startStr, endStr, group);
+  const { data: topClients = [], isFetching: clientsLoading, error: clientsError } = useClients(
+    startStr,
+    endStr,
+    group,
+  );
+  const {
+    data: categoryTrend = [],
+    isFetching: categoryTrendLoading,
+    error: categoryTrendError,
+  } = useCategoryTimeseries(startStr, endStr, bucket, group);
   const { data: backlog, error: backlogError } = useBacklog(endStr, group);
   // The period reaches past the data: the count describes the last day with
   // messages, not the requested end.
@@ -140,14 +186,14 @@ export default function MetricsPage() {
     openTicketsShown,
   );
 
-  /** Deep link to the conversation of an open ticket, on the chat screen. */
-  const chatLink = (t: OpenTicket) => {
+  /** Deep link to a client's conversation on the chat screen, from a given date. */
+  const chatLink = (client: string, groupNames: string | null, from: string) => {
     // A client can belong to several groups; the chat screen shows one at a time.
-    const chatGroup = group ?? t.groupNames?.split(",")[0]?.trim() ?? "";
+    const chatGroup = group ?? groupNames?.split(",")[0]?.trim() ?? "";
     const params = new URLSearchParams({
       group: chatGroup,
-      user: t.client,
-      start: dayjs(t.openedAt).format("YYYY-MM-DD"),
+      user: client,
+      start: dayjs(from).format("YYYY-MM-DD"),
       end: endStr,
     });
     return `/chat?${params}`;
@@ -159,7 +205,7 @@ export default function MetricsPage() {
       dataIndex: "client",
       sorter: (a, b) => a.client.localeCompare(b.client),
       render: (client: string, t) => (
-        <Link to={chatLink(t)} target="_blank">
+        <Link to={chatLink(client, t.groupNames, t.openedAt)} target="_blank">
           {client}
         </Link>
       ),
@@ -213,6 +259,28 @@ export default function MetricsPage() {
       },
     },
   ];
+  const clientColumns: ColumnsType<ClientStat> = [
+    {
+      title: "Клиент",
+      dataIndex: "client",
+      render: (client: string, r) => (
+        <Link to={chatLink(client, r.groupNames, startStr)} target="_blank">
+          {client}
+        </Link>
+      ),
+    },
+    { title: "Группа", dataIndex: "groupNames", ellipsis: true },
+    { title: "Заявок", dataIndex: "tickets", align: "right", sorter: (a, b) => a.tickets - b.tickets },
+    { title: "Сообщений", dataIndex: "messages", align: "right", sorter: (a, b) => a.messages - b.messages },
+    { title: "Повторных", dataIndex: "reopens", align: "right", sorter: (a, b) => a.reopens - b.reopens },
+    {
+      title: "",
+      dataIndex: "newClient",
+      width: 70,
+      render: (v: boolean) => (v ? <Tag color="blue">новый</Tag> : null),
+    },
+  ];
+
   const {
     data: categories = [],
     isFetching: categoriesLoading,
@@ -229,6 +297,9 @@ export default function MetricsPage() {
     reopensError ??
     heatmapError ??
     categoriesError ??
+    categoryTrendError ??
+    summaryError ??
+    clientsError ??
     alertsError;
 
   const categoryStats = useMemo(() => {
@@ -303,8 +374,23 @@ export default function MetricsPage() {
 
   const categoriesOption = useMemo<EChartsOption>(() => {
     const named = categoryStats.named;
+    const value = CATEGORY_VALUE[categoryMode];
     return {
-      tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: (params) => {
+          const arr = params as unknown as Array<{ dataIndex: number }>;
+          const cat = named[arr[0].dataIndex];
+          return (
+            `<div style="margin-bottom:6px;font-weight:600">${cat.category}</div>` +
+            `${num(cat.requests)} заявок<br/>` +
+            `первый ответ ${humanizeSeconds(cat.p50FrtSeconds)} · решение ${humanizeSeconds(cat.p50ResolutionSeconds)}<br/>` +
+            `${cat.avgMessages.toFixed(1)} сообщ. на заявку · повторных ${pct(cat.reopens, cat.requests) ?? 0}%` +
+            (cat.unanswered > 0 ? `<br/>без ответа: ${cat.unanswered}` : "")
+          );
+        },
+      },
       grid: { left: 14, right: 48, top: 8, bottom: 4, containLabel: true },
       xAxis: { type: "value", axisLabel: { show: false }, splitLine: { show: false } },
       yAxis: {
@@ -316,7 +402,7 @@ export default function MetricsPage() {
       series: [
         {
           type: "bar",
-          data: named.map((v) => v.requests),
+          data: named.map(value),
           barMaxWidth: 18,
           itemStyle: { color: barFadeX(c.blue), borderRadius: [0, 6, 6, 0] },
           emphasis: { itemStyle: { color: c.blue } },
@@ -324,7 +410,89 @@ export default function MetricsPage() {
         },
       ],
     };
-  }, [categoryStats, c]);
+  }, [categoryStats, categoryMode, c]);
+
+  // Stacked bars per bucket for the biggest categories; the tail is pooled so
+  // the legend stays readable whatever the dictionary grows to.
+  const categoryTrendOption = useMemo<EChartsOption>(() => {
+    const totals = new Map<string, number>();
+    for (const p of categoryTrend) totals.set(p.category, (totals.get(p.category) ?? 0) + p.requests);
+    const top = [...totals.entries()]
+      .filter(([name]) => name !== "Другое")
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, TREND_TOP)
+      .map(([name]) => name);
+    const buckets = [...new Set(categoryTrend.map((p) => p.bucket))].sort();
+    const names = [...top, "Прочие"];
+    const table = new Map(names.map((name) => [name, buckets.map(() => 0)]));
+    for (const p of categoryTrend) {
+      const row = table.get(top.includes(p.category) ? p.category : "Прочие")!;
+      row[buckets.indexOf(p.bucket)] += p.requests;
+    }
+    const palette = [c.blue, c.green, c.amber, c.rose, c.violet, c.cyan, c.faint];
+    return {
+      tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+      legend: { data: names, ...legendTop },
+      grid: { left: 16, right: 16, top: gridTop, bottom: 52, containLabel: true },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 16, bottom: 8 }],
+      xAxis: { type: "category", data: buckets.map((b) => dayjs(b).format(labelFormat)), axisLabel: { hideOverlap: true } },
+      yAxis: { type: "value", ...unit("заявки") },
+      series: names.map(
+        (name, i): BarSeriesOption => ({
+          name,
+          type: "bar",
+          stack: "categories",
+          barMaxWidth: 26,
+          itemStyle: { color: name === "Прочие" ? tint(palette[i], 0.6) : palette[i] },
+          emphasis: { focus: "series" },
+          data: table.get(name),
+        }),
+      ),
+    };
+  }, [categoryTrend, labelFormat, c, unit, gridTop]);
+
+  // One horizontal stacked bar: how the period's tickets ended.
+  const outcomesOption = useMemo<EChartsOption>(() => {
+    const parts: Array<[string, number, string]> = [
+      ["Закрыты", summary?.closed ?? 0, c.green],
+      ["Отклонены", summary?.rejected ?? 0, c.rose],
+      ["Истекли по тишине", summary?.expired ?? 0, c.amber],
+      ["Ещё открыты", summary?.stillOpen ?? 0, c.blue],
+    ];
+    const total = summary?.opened ?? 0;
+    return {
+      tooltip: {
+        trigger: "item",
+        formatter: (p) => {
+          const { seriesName, value } = p as { seriesName: string; value: number };
+          return `${seriesName}: <b>${num(value)}</b> (${pct(value, total) ?? 0}%)`;
+        },
+      },
+      legend: { data: parts.map((p) => p[0]), ...legendTop },
+      grid: { left: 0, right: 0, top: 34, bottom: 0 },
+      xAxis: { type: "value", show: false, max: total || 1 },
+      yAxis: { type: "category", data: [""], show: false },
+      series: parts.map(
+        ([name, value, color]): BarSeriesOption => ({
+          name,
+          type: "bar",
+          stack: "outcomes",
+          barWidth: 22,
+          itemStyle: { color, borderRadius: 4 },
+          label: {
+            show: true,
+            color: c.surface,
+            fontSize: 12,
+            fontWeight: 600,
+            formatter: ({ value: v }) => ((v as number) / (total || 1) >= 0.08 ? num(v as number) : ""),
+          },
+          data: [value],
+        }),
+      ),
+    };
+  }, [summary, c]);
+
+  const backlogOlder = (backlog?.ageMonth ?? 0) + (backlog?.ageOlder ?? 0);
 
   const slaOption = useMemo<EChartsOption>(() => {
     const labels = sla.map((p) => dayjs(p.bucket).format(labelFormat));
@@ -623,7 +791,8 @@ export default function MetricsPage() {
                 value={num(backlog?.openTickets ?? 0)}
                 hint={
                   backlog?.asOf
-                    ? `на ${dayjs(backlog.asOf).format("DD.MM.YYYY")}${backlogClamped ? ", конец данных" : ""}`
+                    ? `на ${dayjs(backlog.asOf).format("DD.MM.YYYY")}${backlogClamped ? ", конец данных" : ""}` +
+                      (backlogOlder > 0 ? ` · старше недели: ${num(backlogOlder)}` : "")
                     : null
                 }
                 icon={<InboxOutlined />}
@@ -636,6 +805,69 @@ export default function MetricsPage() {
         </Col>
       </Row>
 
+      <Row gutter={[16, 16]}>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Без ответа"
+            value={summary ? `${pct(summary.unanswered, summary.opened - summary.stillOpen) ?? 0}%` : "-"}
+            hint={summary ? `${num(summary.unanswered)} заявок без единого ответа` : null}
+            icon={<QuestionCircleOutlined />}
+            accent={c.rose}
+            soft={tint(c.rose, 0.14)}
+          />
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Истекли по тишине"
+            value={summary ? `${pct(summary.expired, summary.opened) ?? 0}%` : "-"}
+            hint={summary ? `${num(summary.expired)} без фразы закрытия` : null}
+            icon={<HourglassOutlined />}
+            accent={c.amber}
+            soft={tint(c.amber, 0.14)}
+          />
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Ответ за 15 мин"
+            value={summary ? `${pct(summary.answeredFast, summary.answered) ?? 0}%` : "-"}
+            hint={summary ? `за час ${pct(summary.answeredHour, summary.answered) ?? 0}%` : null}
+            icon={<ThunderboltOutlined />}
+            accent={c.green}
+            soft={tint(c.green, 0.14)}
+          />
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Решено за час"
+            value={summary ? `${pct(summary.resolvedHour, summary.resolved) ?? 0}%` : "-"}
+            hint={summary ? `за рабочий день ${pct(summary.resolvedDay, summary.resolved) ?? 0}%` : null}
+            icon={<FieldTimeOutlined />}
+            accent={c.blue}
+            soft={tint(c.blue, 0.14)}
+          />
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Благодарностей"
+            value={summary ? `${pct(summary.thanked, summary.closed) ?? 0}%` : "-"}
+            hint={summary ? `${num(summary.thanked)} закрытий со «спасибо»` : null}
+            icon={<LikeOutlined />}
+            accent={c.violet}
+            soft={tint(c.violet, 0.14)}
+          />
+        </Col>
+        <Col xs={12} md={8} xl={4}>
+          <StatCard
+            label="Вне рабочего времени"
+            value={summary ? `${pct(summary.offHours, summary.incoming) ?? 0}%` : "-"}
+            hint={summary ? `${num(summary.offHours)} входящих ночью и в выходные` : null}
+            icon={<MoonOutlined />}
+            accent={c.cyan}
+            soft={tint(c.cyan, 0.14)}
+          />
+        </Col>
+      </Row>
+
       <Card title="Динамика">
         {data.length === 0 && !isFetching ? (
           <Empty description="Нет данных за период" image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -643,6 +875,70 @@ export default function MetricsPage() {
           <EChart option={option} loading={isFetching} height={400} />
         )}
       </Card>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={10}>
+          <Card
+            title="Заявки за период"
+            style={{ height: "100%" }}
+            extra={summary ? <span className="meta">открыто <b>{num(summary.opened)}</b></span> : null}
+          >
+            {!summary || summary.opened === 0 ? (
+              <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            ) : (
+              <>
+                <EChart option={outcomesOption} height={80} />
+                <div className="facts">
+                  <div>
+                    <span className="meta">Клиентов</span>
+                    <b>{num(summary.clients)}</b>
+                    <span className="meta">новых {num(summary.newClients)}</span>
+                  </div>
+                  <div>
+                    <span className="meta">Сообщений на заявку</span>
+                    <b>{summary.p50Messages != null ? Math.round(summary.p50Messages) : "-"}</b>
+                    <span className="meta">
+                      медиана · p90 {summary.p90Messages != null ? Math.round(summary.p90Messages) : "-"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="meta">Ответ после первого</span>
+                    <b>{summary.replies > 0 ? humanizeSeconds(summary.replySeconds / summary.replies) : "-"}</b>
+                    <span className="meta">в среднем, {num(summary.replies)} ответов</span>
+                  </div>
+                  <div>
+                    <span className="meta">Взято в работу</span>
+                    <b>{num(summary.inProgress)}</b>
+                    <span className="meta">
+                      {summary.avgPickupSeconds != null
+                        ? `через ${humanizeSeconds(summary.avgPickupSeconds)} в среднем`
+                        : "фраза «в работе» не писалась"}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="meta">Передач между участками</span>
+                    <b>{num(summary.handoffs)}</b>
+                    <span className="meta">{pct(summary.handoffs, summary.opened) ?? 0}% заявок</span>
+                  </div>
+                </div>
+              </>
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} xl={14}>
+          <Card title="Частые обращения" style={{ height: "100%" }} extra={<span className="meta">по числу заявок</span>}>
+            <Table
+              rowKey="client"
+              columns={clientColumns}
+              dataSource={topClients}
+              loading={clientsLoading}
+              size="small"
+              pagination={false}
+              scroll={{ x: true, y: 300 }}
+            />
+          </Card>
+        </Col>
+      </Row>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} xl={12}>
@@ -733,14 +1029,39 @@ export default function MetricsPage() {
               </span>
             }
           >
+            <Segmented
+              size="small"
+              block
+              value={categoryMode}
+              onChange={(v) => setCategoryMode(v as CategoryMode)}
+              options={[
+                { label: "Заявки", value: "requests" },
+                { label: "Первый ответ", value: "frt" },
+                { label: "Решение", value: "resolution" },
+                { label: "Сообщений", value: "messages" },
+                { label: "Повторы", value: "reopens" },
+              ]}
+              style={{ marginBottom: 8 }}
+            />
+            <div className="meta" style={{ marginBottom: 4 }}>
+              {CATEGORY_UNIT[categoryMode]}
+            </div>
             {categoryStats.named.length === 0 && !categoriesLoading ? (
               <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
-              <EChart option={categoriesOption} loading={categoriesLoading} height={320} />
+              <EChart option={categoriesOption} loading={categoriesLoading} height={280} />
             )}
           </Card>
         </Col>
       </Row>
+
+      <Card title="Категории во времени" extra={<span className="meta">по дате открытия заявки</span>}>
+        {categoryTrend.length === 0 && !categoryTrendLoading ? (
+          <Empty description="Нет данных" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <EChart option={categoryTrendOption} loading={categoryTrendLoading} height={300} />
+        )}
+      </Card>
 
       <Modal
         title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")}`}
@@ -780,6 +1101,14 @@ export default function MetricsPage() {
         <p className="meta" style={{ marginTop: 0 }}>
           Имя клиента открывает его переписку в новой вкладке, начиная с даты открытия заявки.
         </p>
+        {backlog && backlog.openTickets > 0 && (
+          <p className="meta" style={{ marginTop: 0 }}>
+            Возраст: до 1 дня <b>{num(backlog.ageDay)}</b> · 2-3 дня <b>{num(backlog.ageThreeDays)}</b> · 4-7 дней{" "}
+            <b>{num(backlog.ageWeek)}</b> · 8-30 дней <b>{num(backlog.ageMonth)}</b> · больше месяца{" "}
+            <b>{num(backlog.ageOlder)}</b>
+            {backlog.oldestOpenedAt ? ` · самая старая с ${dayjs(backlog.oldestOpenedAt).format("DD.MM.YYYY")}` : ""}
+          </p>
+        )}
         <Table
           rowKey={(t) => `${t.client}_${t.openedAt}`}
           columns={openTicketColumns}

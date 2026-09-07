@@ -189,3 +189,22 @@ CREATE TABLE IF NOT EXISTS client_group (
 
 -- Group pickers and per-group reports look the table up by group name.
 ALTER TABLE client_group ADD INDEX IF NOT EXISTS idx_client_group_grp (grp);
+
+-- Quality and effort signals precomputed at ingest (durations are WORKING
+-- seconds; a full rebuild backfills history):
+--   thanked         the client acknowledged the closure within the ack window
+--                   - a satisfaction proxy that needs no survey;
+--   pickup_seconds  open -> "заявка в работе", when the operator wrote it;
+--   awaiting_since  the client's oldest unanswered message after the first
+--                   response (NULL while the operator was the last to speak);
+--   replies /       count and total wait of operator replies AFTER the first
+--   reply_seconds   one, so the average later reply complements FRT.
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS pickup_seconds BIGINT NULL AFTER in_progress_at;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS thanked TINYINT(1) NOT NULL DEFAULT 0 AFTER reopen_llm;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS awaiting_since DATETIME NULL AFTER thanked;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS replies INT NOT NULL DEFAULT 0 AFTER awaiting_since;
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS reply_seconds BIGINT NOT NULL DEFAULT 0 AFTER replies;
+
+-- "Which of this operator's closures came back" joins the reopening ticket to
+-- the one it reopened; without the index every such lookup scans the table.
+ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_reopened_from (reopened_from);
