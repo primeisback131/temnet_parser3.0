@@ -50,6 +50,12 @@ public class LoginAttemptService {
         failuresByUser.invalidate(key(username));
     }
 
+    /** Lifts every lockout at once: an administrator unblocking a user whose address is banned. */
+    public void clearAll() {
+        failuresByUser.invalidateAll();
+        failuresByIp.invalidateAll();
+    }
+
     private static int count(Cache<String, AtomicInteger> cache, String key) {
         AtomicInteger counter = cache.getIfPresent(key);
         return counter == null ? 0 : counter.get();
