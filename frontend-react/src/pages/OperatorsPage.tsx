@@ -1,17 +1,24 @@
-import { Card, DatePicker, Select, Space, Table, Tooltip } from "antd";
+import { FileExcelOutlined } from "@ant-design/icons";
+import { App, Button, Card, DatePicker, Select, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useMemo, useState } from "react";
 import { useGroups, useOperators } from "../api/queries";
 import type { OperatorStat } from "../api/types";
+import { useAuth } from "../auth";
 import QueryError from "../components/QueryError";
 import { defaultRange, toApiDate } from "../lib/date";
 import { humanizeSeconds } from "../lib/format";
+import { exportHelpReport } from "../lib/helpReport";
 
 const { RangePicker } = DatePicker;
 
 export default function OperatorsPage() {
+  const { message } = App.useApp();
+  const { canExport } = useAuth();
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
+  /** Operator whose report is being built; one at a time keeps the toasts readable. */
+  const [exporting, setExporting] = useState<string | null>(null);
 
   const startStr = toApiDate(start);
   const endStr = toApiDate(end);
@@ -60,8 +67,36 @@ export default function OperatorsPage() {
         sorter: (a, b) => (a.avgReplySeconds ?? Infinity) - (b.avgReplySeconds ?? Infinity),
         render: (v: number | null) => humanizeSeconds(v),
       },
+      ...(canExport
+        ? [
+            {
+              title: "",
+              key: "report",
+              width: 48,
+              render: (_: unknown, row: OperatorStat) => (
+                <Tooltip title="Отчёт по аккаунту в Excel за выбранный период: сводка по его группам и лист на каждую группу. Период больше месяца выгружается zip-архивом по месяцам">
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<FileExcelOutlined />}
+                    loading={exporting === row.operator}
+                    disabled={exporting !== null && exporting !== row.operator}
+                    onClick={async () => {
+                      setExporting(row.operator);
+                      try {
+                        await exportHelpReport(message, start, end, row.operator);
+                      } finally {
+                        setExporting(null);
+                      }
+                    }}
+                  />
+                </Tooltip>
+              ),
+            },
+          ]
+        : []),
     ],
-    [maxClosed],
+    [maxClosed, canExport, exporting, message, start, end],
   );
 
   return (
