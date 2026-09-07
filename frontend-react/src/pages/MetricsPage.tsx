@@ -6,7 +6,6 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import {
-  App,
   Button,
   Card,
   Col,
@@ -34,7 +33,6 @@ import {
   useCategories,
   useGroups,
   useHeatmap,
-  useHelpAccounts,
   useReopens,
   useResolution,
   useSla,
@@ -47,11 +45,9 @@ import StatCard from "../components/StatCard";
 import { areaFade, barFade, barFadeX, chartColors, dot, legendTop } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel } from "../lib/excel";
-import { exportHelpReport } from "../lib/helpReport";
 import { humanizeSeconds } from "../lib/format";
 import { tint } from "../lib/palette";
 import { useMediaQuery } from "../lib/useMediaQuery";
-import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
 
 const { RangePicker } = DatePicker;
@@ -106,17 +102,11 @@ function spreadBand(low: number[], high: number[], color: string): LineSeriesOpt
 }
 
 export default function MetricsPage() {
-  const { message } = App.useApp();
   const { mode } = useThemeMode();
   const [[start, end], setRange] = useState(defaultRange);
   const [group, setGroup] = useState<string | null>(null);
   const [bucket, setBucket] = useState<Bucket>("day");
   const [heatmapMode, setHeatmapMode] = useState<"sum" | "avg">("sum");
-  const [exporting, setExporting] = useState(false);
-  const [helpAccount, setHelpAccount] = useState<string | null>(null);
-  const { canExport } = useAuth();
-  // /help-accounts is closed to read-only accounts - asking would earn a 403.
-  const { data: helpAccounts = [] } = useHelpAccounts(canExport);
   const c = chartColors(mode);
   // Below this the legend of a two-axis chart spans the full width and would
   // run into the axis names sitting in the top corners, so those are dropped
@@ -454,16 +444,6 @@ export default function MetricsPage() {
     };
   }, [reopens, labelFormat, c, unit, gridTop]);
 
-  const exportReport = async () => {
-    if (!helpAccount) return;
-    setExporting(true);
-    try {
-      await exportHelpReport(message, start, end, helpAccount);
-    } finally {
-      setExporting(false);
-    }
-  };
-
   // Number of times each weekday (0=Mon..6=Sun) occurs in the selected range,
   // used to turn cell sums into per-occurrence averages.
   const weekdayCounts = useMemo(() => {
@@ -761,36 +741,6 @@ export default function MetricsPage() {
           </Card>
         </Col>
       </Row>
-
-      {canExport && (
-        <Card title="Отчёт по help-аккаунту">
-          <Space wrap size={12} align="center">
-            <span className="meta">
-              Excel за выбранный период: сводка по группам аккаунта и лист на каждую группу с
-              пользователями, динамикой и категориями. Период больше месяца выгружается zip-архивом по
-              месяцам.
-            </span>
-            <Select
-              placeholder="Help-аккаунт"
-              allowClear
-              showSearch
-              style={{ width: 220 }}
-              value={helpAccount}
-              onChange={(v) => setHelpAccount(v ?? null)}
-              options={helpAccounts.map((a) => ({ label: a.account, value: a.account }))}
-            />
-            <Button
-              type="primary"
-              icon={<FileExcelOutlined />}
-              onClick={() => void exportReport()}
-              loading={exporting}
-              disabled={!helpAccount}
-            >
-              Выгрузить
-            </Button>
-          </Space>
-        </Card>
-      )}
 
       <Modal
         title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")}`}
