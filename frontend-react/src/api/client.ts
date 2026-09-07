@@ -174,6 +174,7 @@ export const api = {
   setUserPassword: (id: number, password: string) =>
     send<void>(`/admin/users/${id}/password`, "PUT", { password }),
   deleteUser: (id: number) => send<void>(`/admin/users/${id}`, "DELETE"),
+  clearLockouts: () => send<void>("/admin/users/lockouts", "DELETE"),
 
   // ---- analytics DB maintenance (admins only) ----
   getSyncStatus: () => getJson<SyncStatus>("/admin/sync/status"),

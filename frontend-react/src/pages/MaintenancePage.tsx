@@ -1,4 +1,4 @@
-import { DatabaseOutlined, ReloadOutlined, SyncOutlined, WarningOutlined } from "@ant-design/icons";
+import { DatabaseOutlined, ReloadOutlined, SyncOutlined, UnlockOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Alert,
@@ -10,6 +10,7 @@ import {
   Modal,
   Space,
   Spin,
+  Tooltip,
   Typography,
 } from "antd";
 import dayjs from "dayjs";
@@ -108,6 +109,15 @@ export default function MaintenancePage() {
     }
   };
 
+  const unlock = async () => {
+    try {
+      await api.clearLockouts();
+      message.success("Блокировки входа сняты");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "Не удалось снять блокировки");
+    }
+  };
+
   const elapsed = run ? formatDuration(now - dayjs(run.startedAt).valueOf()) : "";
   const interval = status ? formatInterval(status.syncIntervalSeconds) : "по расписанию";
 
@@ -200,6 +210,11 @@ export default function MaintenancePage() {
             <Button danger icon={<WarningOutlined />} disabled={running} onClick={() => setConfirmOpen(true)}>
               Пересобрать базу
             </Button>
+            <Tooltip title="Сбрасывает счётчики неудачных попыток входа по всем логинам и адресам">
+              <Button icon={<UnlockOutlined />} onClick={() => void unlock()}>
+                Снять блокировки входа
+              </Button>
+            </Tooltip>
           </Space>
 
           <Alert
