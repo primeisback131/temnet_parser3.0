@@ -30,4 +30,6 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // CI logs are all there is on the runner: the message, not just the class.
+    testLogging { exceptionFormat 'full' }
 }
