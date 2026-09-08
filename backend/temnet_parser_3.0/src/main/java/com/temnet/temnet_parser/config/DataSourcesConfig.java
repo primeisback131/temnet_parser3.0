@@ -33,8 +33,13 @@ public class DataSourcesConfig {
             @Value("${spring.datasource.username}") String username,
             @Value("${spring.datasource.password}") String password,
             @Value("${spring.datasource.hikari.maximum-pool-size:4}") int poolSize,
-            @Value("${spring.datasource.hikari.pool-name:temnet-pool}") String poolName) {
-        return pool(url, username, password, poolSize, poolName);
+            @Value("${spring.datasource.hikari.pool-name:temnet-pool}") String poolName,
+            @Value("${app.dump.timezone}") String timezone) {
+        HikariDataSource ds = pool(url, username, password, poolSize, poolName);
+        // archive.created_at is a TIMESTAMP and comes back in the SESSION zone;
+        // pinned, so every machine reads the same wall clock from the same dump.
+        ds.addDataSourceProperty("timezone", timezone);
+        return ds;
     }
 
     @Bean

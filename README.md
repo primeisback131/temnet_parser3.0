@@ -88,6 +88,7 @@ run_frontend_prod.bat
 | Переменная | Что задаёт | По умолчанию |
 | ---------- | ---------- | ------------ |
 | `DB_URL`, `DB_USER`, `DB_PASSWORD` | подключение к дампу ejabberd | `localhost:3306/ejabberd`, `root:root` |
+| `DUMP_TZ` | пояс сессии при чтении дампа: `archive.created_at` - TIMESTAMP, MariaDB отдаёт её в поясе сессии; фиксированное смещение, после смены нужна пересборка | `+05:00` |
 | `ANALYTICS_DB_URL`, `ANALYTICS_DB_USER`, `ANALYTICS_DB_PASSWORD` | аналитическая БД | `localhost:3306/temnet_analytics`, `root:root` |
 | `DB_POOL_SIZE`, `ANALYTICS_DB_POOL_SIZE` | размеры пулов соединений (дамп читает только синхронизация, аналитика обслуживает все запросы) | 4 / 16 |
 | `API_CONTEXT_PATH` | префикс API | `/api` |
