@@ -58,9 +58,11 @@ public class LlmChatConfig {
             default -> throw new IllegalArgumentException(
                     "Unknown app.llm.provider '" + kind + "': use claude-cli, http or off");
         };
-        if (chat.enabled()) {
-            log.info("LLM classification provider: {}", chat.describe());
-        } else {
+        // No describe() here: it reads app_setting, and the schema that creates
+        // that table is applied later, in AnalyticsSyncService. On a fresh
+        // database the context died right here. StartupChecks names the
+        // enabled provider once the context is up.
+        if (!chat.enabled()) {
             log.info("LLM classification disabled (LLM_PROVIDER is off and no LLM_BASE_URL)");
         }
         return chat;
