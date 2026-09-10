@@ -61,7 +61,8 @@ import java.util.regex.Pattern;
  * machine maintains tickets: a client message opens a ticket (unless it is a
  * short "thanks" right after a closure), an operator closure phrase closes
  * it, long silence expires it, and a quick return after a closure is scored
- * as a probable reopen (marker words + same category).
+ * as a probable reopen (marker words confirm it; a bare category match or no
+ * signal at all goes to the LLM for the verdict).
  */
 @Service
 public class AnalyticsSyncService {
@@ -767,8 +768,10 @@ public class AnalyticsSyncService {
                 }
                 ticket.reopenedFrom = st.lastClosed.id;
                 ticket.reopenScore = score;
-                if (score == 0) {
-                    // No heuristic signal — an ambiguous candidate for the LLM.
+                if (score < 2) {
+                    // No marker words: a bare category match is a weak signal,
+                    // so the LLM gets the final say (2026-09-10: score-1
+                    // tickets used to stay "probable" forever).
                     ticket.reopenLlm = "pending";
                 }
             }

@@ -300,8 +300,8 @@ export interface ResolutionPoint {
 export interface ReopenPoint {
   bucket: string; // ISO date
   closed: number; // closures (rate denominator)
-  probable: number; // reopens with any signal
-  confirmed: number; // reopens with strong signal (marker words)
+  probable: number; // reopens with any signal the LLM has not refuted
+  confirmed: number; // reopens with strong signal (marker words) or LLM "same"
 }
 
 export interface Alert {

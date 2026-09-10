@@ -22,7 +22,7 @@ FROM (
       ON cg.client = t.client AND cg.grp NOT LIKE 'help%' AND cg.grp != 'all'
     WHERE t.account = :account
       AND t.opened_at >= :start AND t.opened_at < :endExclusive
-      AND (t.reopen_score > 0 OR t.reopen_llm = 'same')
+      AND ((t.reopen_score > 0 OR t.reopen_llm = 'same') AND COALESCE(t.reopen_llm, '') <> 'new')
 ) AS parts
 GROUP BY group_name
 ORDER BY group_name

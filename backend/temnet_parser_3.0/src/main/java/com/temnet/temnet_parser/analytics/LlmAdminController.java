@@ -108,7 +108,7 @@ public class LlmAdminController {
                     reopens.put(rs.getString("verdict"), rs.getLong("count"));
                 });
         reopens.put("heuristic", analytics.queryForObject(
-                "SELECT COUNT(*) FROM ticket WHERE reopen_score > 0", Long.class));
+                "SELECT COUNT(*) FROM ticket WHERE reopen_score >= 2", Long.class));
 
         LlmCategoryClassifier.Mode mode = LlmCategoryClassifier.parseMode(settings.current().categories());
         String modeFilter = LlmCategoryClassifier.modeFilter(mode);

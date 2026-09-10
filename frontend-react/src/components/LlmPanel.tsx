@@ -333,7 +333,7 @@ export default function LlmPanel() {
                   </Col>
                 </Row>
                 <Typography.Text type="secondary">
-                  Ещё {num(counters.reopens.heuristic)} повторов распознаны по маркерным словам и категории без модели.
+                  Ещё {num(counters.reopens.heuristic)} повторов распознаны по маркерным словам без модели.
                 </Typography.Text>
               </Card>
             </Col>

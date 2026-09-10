@@ -91,10 +91,10 @@ ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_stale (stale_at);
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS account VARCHAR(191) NULL AFTER client;
 ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_account (account);
 
--- LLM verdict for ambiguous reopen candidates (no marker words, different
--- category): 'pending' -> awaiting classification, 'same' -> confirmed the
--- same issue, 'new' -> a different issue. NULL for non-candidates and for
--- candidates already decided by the heuristics.
+-- LLM verdict for reopen candidates without marker words (reopen_score < 2):
+-- 'pending' -> awaiting classification, 'same' -> confirmed the same issue,
+-- 'new' -> a different issue. NULL for non-candidates and for candidates the
+-- marker words already confirmed.
 ALTER TABLE ticket ADD COLUMN IF NOT EXISTS reopen_llm VARCHAR(10) NULL AFTER reopen_score;
 ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_reopen_llm (reopen_llm);
 
@@ -208,3 +208,8 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS reply_seconds BIGINT NOT NULL DEFAUL
 -- "Which of this operator's closures came back" joins the reopening ticket to
 -- the one it reopened; without the index every such lookup scans the table.
 ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_reopened_from (reopened_from);
+
+-- 2026-09-10: a bare category match (reopen_score = 1) goes to the LLM too;
+-- before, such tickets never got a verdict and stayed "probable" forever.
+-- Re-queues the ones scored by the old rule; idempotent, a no-op afterwards.
+UPDATE ticket SET reopen_llm = 'pending' WHERE reopen_score = 1 AND reopen_llm IS NULL;

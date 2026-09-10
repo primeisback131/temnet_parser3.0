@@ -28,7 +28,8 @@ LEFT JOIN (
            SUM(t.thanked)             AS thanked,
            SUM(EXISTS (SELECT 1 FROM ticket r
                        WHERE r.reopened_from = t.id
-                         AND (r.reopen_score > 0 OR r.reopen_llm = 'same'))) AS reopened
+                         AND (r.reopen_score > 0 OR r.reopen_llm = 'same')
+                         AND COALESCE(r.reopen_llm, '') <> 'new')) AS reopened
     FROM ticket t
     WHERE t.closed_at >= :start AND t.closed_at < :endExclusive
       ${groupFilterTickets}

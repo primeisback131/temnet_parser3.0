@@ -9,7 +9,7 @@ SELECT
        AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all')        AS group_names,
     COUNT(*)                                                   AS tickets,
     SUM(t.messages_in + t.messages_out)                        AS messages,
-    SUM(t.reopen_score > 0 OR t.reopen_llm = 'same')           AS reopens,
+    SUM((t.reopen_score > 0 OR t.reopen_llm = 'same') AND COALESCE(t.reopen_llm, '') <> 'new')           AS reopens,
     NOT EXISTS (SELECT 1 FROM ticket p
                 WHERE p.client = t.client AND p.opened_at < :start) AS new_client
 FROM ticket t

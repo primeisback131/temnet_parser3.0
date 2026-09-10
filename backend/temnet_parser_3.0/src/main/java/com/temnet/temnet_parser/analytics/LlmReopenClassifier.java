@@ -14,7 +14,8 @@ import java.util.List;
 /**
  * Classifies AMBIGUOUS reopen candidates with an LLM: tickets opened shortly
  * after the same client's previous ticket was closed, but with no marker
- * words and no category match (reopen_llm = 'pending'). The model answers
+ * words (reopen_llm = 'pending'; a bare category match is not enough on its
+ * own and is counted "probable" only until the verdict). The model answers
  * whether the new request is the same issue (SAME) or a different one (NEW).
  * <p>
  * The transport ({@link LlmChat}) is configured separately; disabled means

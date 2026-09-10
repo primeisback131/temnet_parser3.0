@@ -19,7 +19,7 @@ FROM (
     SELECT ${bucketOpened}, 0, 1, IF(t.reopen_score >= 2 OR t.reopen_llm = 'same', 1, 0)
     FROM ticket t
     WHERE t.opened_at >= :start AND t.opened_at < :endExclusive
-      AND (t.reopen_score > 0 OR t.reopen_llm = 'same')
+      AND ((t.reopen_score > 0 OR t.reopen_llm = 'same') AND COALESCE(t.reopen_llm, '') <> 'new')
       ${groupFilter}
 ) AS parts
 GROUP BY bucket

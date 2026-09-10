@@ -12,7 +12,7 @@ SELECT
     t.frt_seconds                                        AS frt_seconds,
     t.resolution_seconds                                 AS resolution_seconds,
     t.closed_by                                          AS closed_by,
-    (t.reopen_score > 0 OR t.reopen_llm = 'same')        AS reopen,
+    ((t.reopen_score > 0 OR t.reopen_llm = 'same') AND COALESCE(t.reopen_llm, '') <> 'new')        AS reopen,
     t.thanked                                            AS thanked
 FROM ticket t
 WHERE t.client = :client

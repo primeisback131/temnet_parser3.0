@@ -16,7 +16,7 @@ FROM (
            IF(t.status = 'closed' AND t.resolution_seconds <= :maxResolutionSeconds,
               t.resolution_seconds, NULL)                                                        AS resolution,
            t.messages_in + t.messages_out                                                        AS msgs,
-           t.reopen_score > 0 OR t.reopen_llm = 'same'                                           AS reopen,
+           (t.reopen_score > 0 OR t.reopen_llm = 'same') AND COALESCE(t.reopen_llm, '') <> 'new' AS reopen,
            t.first_response_at IS NULL AND NOT (t.status = 'open' AND t.stale_at >= ${effectiveEnd}) AS unanswered
     FROM ticket t
     WHERE t.opened_at >= :start
