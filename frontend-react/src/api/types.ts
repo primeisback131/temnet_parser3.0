@@ -135,6 +135,8 @@ export interface HelpAccountReport {
 
 export interface UserStat {
   userName: string;
+  /** ISO local time the account was last online; null when ejabberd has no record. */
+  lastSeenAt: string | null;
   closedRequests: number;
   rejectedRequests: number;
   openRequests: number;

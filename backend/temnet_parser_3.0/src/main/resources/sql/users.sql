@@ -1,10 +1,11 @@
 -- Per-client stats within one group: ticket outcomes in the period, tickets
 -- still open at its end, plus the number of messages in their support
--- conversation. A client is listed when anything of theirs falls into the
--- period — a message, a closure, or a ticket still open at its end — which
--- is exactly what the company table sums over, so these rows add up to it.
+-- conversation. Every member of the group is listed, idle ones with zeros
+-- and the time the account was last online, so stale accounts can be
+-- spotted. Zero rows add nothing, so the rows still sum to the company table.
 SELECT
     cg.client                   AS user_name,
+    cg.last_seen_at             AS last_seen_at,
     COALESCE(tk.closed, 0)      AS closed_requests,
     COALESCE(tk.rejected, 0)    AS rejected_requests,
     COALESCE(tk.open_at_end, 0) AS open_requests,
@@ -34,5 +35,4 @@ LEFT JOIN (
     GROUP BY t.client
 ) AS tk ON tk.client = cg.client
 WHERE cg.grp = :groupName
-  AND (msg.total > 0 OR tk.closed > 0 OR tk.rejected > 0 OR tk.open_at_end > 0)
 ORDER BY user_name

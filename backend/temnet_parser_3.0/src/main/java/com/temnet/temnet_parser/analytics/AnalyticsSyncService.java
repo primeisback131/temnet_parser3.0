@@ -586,14 +586,28 @@ public class AnalyticsSyncService {
         return fresh.size();
     }
 
-    /** Full refresh of group membership (small table). */
+    /**
+     * Full refresh of group membership (small table), with the last time each
+     * account was online from mod_last. {@code last.seconds} is a unix epoch;
+     * FROM_UNIXTIME renders it in the dump session's zone, so it is shifted
+     * into business time exactly like archive timestamps.
+     */
     private void syncGroups() {
-        List<Object[]> rows = source.sql("SELECT DISTINCT SUBSTRING_INDEX(jid, '@', 1), grp FROM sr_user")
-                .query((rs, i) -> new Object[]{rs.getString(1), rs.getString(2)})
+        List<Object[]> rows = source.sql("""
+                        SELECT DISTINCT SUBSTRING_INDEX(s.jid, '@', 1) AS client, s.grp,
+                               FROM_UNIXTIME(l.seconds) AS last_seen
+                        FROM sr_user s
+                        LEFT JOIN last l ON l.username = SUBSTRING_INDEX(s.jid, '@', 1)
+                        """)
+                .query((rs, i) -> {
+                    Timestamp seen = rs.getTimestamp("last_seen");
+                    return new Object[]{rs.getString("client"), rs.getString("grp"),
+                            seen == null ? null : toBusinessTime(seen.toLocalDateTime())};
+                })
                 .list();
         tx.executeWithoutResult(status -> {
             analytics.update("DELETE FROM client_group");
-            analytics.batchUpdate("INSERT INTO client_group (client, grp) VALUES (?, ?)", rows);
+            analytics.batchUpdate("INSERT INTO client_group (client, grp, last_seen_at) VALUES (?, ?, ?)", rows);
         });
     }
 

@@ -1,6 +1,7 @@
 import { FileExcelOutlined } from "@ant-design/icons";
 import { Button, Card, DatePicker, Empty, Input, Select, Space, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import dayjs from "dayjs";
 import { useMemo, useState } from "react";
 import { useGroups, useUsers } from "../api/queries";
 import type { UserStat } from "../api/types";
@@ -13,6 +14,13 @@ const { RangePicker } = DatePicker;
 
 const columns: ColumnsType<UserStat> = [
   { title: "Имя пользователя", dataIndex: "userName", sorter: (a, b) => a.userName.localeCompare(b.userName) },
+  {
+    title: "Был в сети",
+    dataIndex: "lastSeenAt",
+    render: (v: string | null) => (v ? dayjs(v).format("DD.MM.YYYY HH:mm") : "-"),
+    // ISO strings order lexically; accounts without a record go first.
+    sorter: (a, b) => (a.lastSeenAt ?? "").localeCompare(b.lastSeenAt ?? ""),
+  },
   { title: "Закрытых заявок", dataIndex: "closedRequests", sorter: (a, b) => a.closedRequests - b.closedRequests },
   { title: "Отклоненных заявок", dataIndex: "rejectedRequests", sorter: (a, b) => a.rejectedRequests - b.rejectedRequests },
   { title: "Открытых на конец периода", dataIndex: "openRequests", sorter: (a, b) => a.openRequests - b.openRequests },
@@ -23,6 +31,7 @@ const columns: ColumnsType<UserStat> = [
 function userRows(rows: UserStat[]) {
   return rows.map((u) => ({
     "Имя пользователя": u.userName,
+    "Был в сети": u.lastSeenAt ? dayjs(u.lastSeenAt).format("DD.MM.YYYY HH:mm") : "",
     "Закрытых заявок": u.closedRequests,
     "Отклоненных заявок": u.rejectedRequests,
     "Открытых на конец периода": u.openRequests,

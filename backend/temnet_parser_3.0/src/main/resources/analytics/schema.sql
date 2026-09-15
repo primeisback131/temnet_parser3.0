@@ -190,6 +190,10 @@ CREATE TABLE IF NOT EXISTS client_group (
 -- Group pickers and per-group reports look the table up by group name.
 ALTER TABLE client_group ADD INDEX IF NOT EXISTS idx_client_group_grp (grp);
 
+-- When the account was last online (ejabberd mod_last, copied with the
+-- membership) so stale accounts can be spotted without opening each one.
+ALTER TABLE client_group ADD COLUMN IF NOT EXISTS last_seen_at DATETIME NULL;
+
 -- Quality and effort signals precomputed at ingest (durations are WORKING
 -- seconds; a full rebuild backfills history):
 --   thanked         the client acknowledged the closure within the ack window
