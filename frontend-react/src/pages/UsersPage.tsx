@@ -9,11 +9,18 @@ import { useAuth } from "../auth";
 import QueryError from "../components/QueryError";
 import { defaultRange, toApiDate } from "../lib/date";
 import { exportToExcel } from "../lib/excel";
+import { compareAccountNames } from "../lib/format";
 
 const { RangePicker } = DatePicker;
 
 const columns: ColumnsType<UserStat> = [
-  { title: "Имя пользователя", dataIndex: "userName", sorter: (a, b) => a.userName.localeCompare(b.userName) },
+  {
+    title: "Имя пользователя",
+    dataIndex: "userName",
+    // The API orders by plain string, so the table applies the numeric order itself.
+    sorter: (a, b) => compareAccountNames(a.userName, b.userName),
+    defaultSortOrder: "ascend",
+  },
   {
     title: "Был в сети",
     dataIndex: "lastSeenAt",
