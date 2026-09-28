@@ -1,6 +1,7 @@
-import { Spin } from "antd";
+import { LockOutlined } from "@ant-design/icons";
+import { Button, Result, Spin } from "antd";
 import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
 import AppLayout from "./components/AppLayout";
 import AdminUsersPage from "./pages/AdminUsersPage";
@@ -17,11 +18,45 @@ const MetricsPage = lazy(() => import("./pages/MetricsPage"));
 
 const centeredSpin = <Spin style={{ display: "block", margin: "80px auto" }} />;
 
+/**
+ * A section the account has no rights to, reached by a link or a typed URL.
+ * It used to bounce to "home" in silence: a chat link on the metrics page
+ * for a manager without chats just reopened the metrics page.
+ */
+function NoAccess({ section, home }: { section: string; home: string }) {
+  const navigate = useNavigate();
+  return (
+    <Result
+      status="warning"
+      icon={<LockOutlined />}
+      title={`Нет доступа к разделу «${section}»`}
+      extra={
+        <Button type="primary" onClick={() => navigate(home)}>
+          На главную
+        </Button>
+      }
+    />
+  );
+}
+
 export default function App() {
-  const { user, loading, canUseChats, canViewMetrics } = useAuth();
+  const { user, loading, startupError, retry, canUseChats, canViewMetrics } = useAuth();
 
   if (loading) {
     return centeredSpin;
+  }
+  if (startupError) {
+    return (
+      <Result
+        status="warning"
+        title={startupError.message}
+        extra={
+          <Button type="primary" onClick={retry}>
+            Повторить
+          </Button>
+        }
+      />
+    );
   }
   if (!user) {
     return <LoginPage />;
@@ -36,23 +71,24 @@ export default function App() {
   // Chats are granted separately and metrics depend on the role, so where
   // "home" points depends on the rights.
   const home = canUseChats ? "/chat" : canViewMetrics ? "/metrics" : "/companies";
+  const denied = (section: string) => <NoAccess section={section} home={home} />;
 
   return (
     <Routes>
       <Route element={<AppLayout />}>
         <Route index element={<Navigate to={home} replace />} />
-        {canUseChats && <Route path="/chat" element={<ChatPage />} />}
-        {canViewMetrics && (
-          <Route
-            path="/metrics"
-            element={<Suspense fallback={centeredSpin}><MetricsPage /></Suspense>}
-          />
-        )}
+        <Route path="/chat" element={canUseChats ? <ChatPage /> : denied("Чат")} />
+        <Route
+          path="/metrics"
+          element={
+            canViewMetrics ? <Suspense fallback={centeredSpin}><MetricsPage /></Suspense> : denied("Метрики")
+          }
+        />
         <Route path="/companies" element={<CompaniesPage />} />
         <Route path="/users" element={<UsersPage />} />
-        {canViewMetrics && <Route path="/operators" element={<OperatorsPage />} />}
-        {isAdmin && <Route path="/admin/users" element={<AdminUsersPage />} />}
-        {isAdmin && <Route path="/admin/maintenance" element={<MaintenancePage />} />}
+        <Route path="/operators" element={canViewMetrics ? <OperatorsPage /> : denied("Операторы")} />
+        <Route path="/admin/users" element={isAdmin ? <AdminUsersPage /> : denied("Учётные записи")} />
+        <Route path="/admin/maintenance" element={isAdmin ? <MaintenancePage /> : denied("Обслуживание")} />
         <Route path="*" element={<Navigate to={home} replace />} />
       </Route>
     </Routes>

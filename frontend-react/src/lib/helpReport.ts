@@ -3,6 +3,7 @@ import type { Dayjs } from "dayjs";
 import { api } from "../api/client";
 import type { HelpAccountReport } from "../api/types";
 import { monthlyRanges, toApiDate } from "./date";
+import { describeError } from "./errors";
 import { exportWorkbook, exportWorkbooksZip, safeSheetName, type SheetSpec, type WorkbookFile } from "./excel";
 
 /** Groups a report slice by its groupName. */
@@ -161,7 +162,7 @@ export async function exportHelpReport(message: MessageInstance, start: Dayjs, e
     message.open({
       key: progressKey,
       type: "error",
-      content: e instanceof Error ? e.message : "Не удалось выгрузить отчёт",
+      content: e instanceof Error ? describeError(e) : "Не удалось выгрузить отчёт",
       duration: 5,
     });
   }

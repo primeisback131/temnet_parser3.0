@@ -102,7 +102,9 @@ export default function AdminUsersPage() {
   };
 
   const save = async () => {
-    const values = await form.validateFields();
+    // The form marks its own invalid fields; a rejected check is not a failure.
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
     const payload = {
       fullName: values.fullName || null,
       role: values.role,
@@ -125,7 +127,8 @@ export default function AdminUsersPage() {
   };
 
   const savePassword = async () => {
-    const values = await passwordForm.validateFields();
+    const values = await passwordForm.validateFields().catch(() => null);
+    if (!values) return;
     if (!passwordFor) return;
     try {
       await api.setUserPassword(passwordFor.id, values.password);

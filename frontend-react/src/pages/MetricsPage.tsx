@@ -26,7 +26,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import type { BarSeriesOption, EChartsOption, LineSeriesOption } from "echarts";
 import dayjs from "dayjs";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
@@ -44,6 +44,7 @@ import {
   useTimeseries,
 } from "../api/queries";
 import type { Bucket, CategoryCount, ClientStat } from "../api/types";
+import { useAuth } from "../auth";
 import EChart from "../components/EChart";
 import QueryError from "../components/QueryError";
 import StatCard from "../components/StatCard";
@@ -178,28 +179,39 @@ export default function MetricsPage() {
   const backlogClamped = backlog != null && dayjs(backlog.asOf).isBefore(dayjs(endStr), "day");
   const [drill, setDrill] = useState<DrillKey | null>(null);
 
-  /** Deep link to a client's conversation on the chat screen, from a given date. */
-  const chatLink = (client: string, groupNames: string | null, from: string) => {
-    // A client can belong to several groups; the chat screen shows one at a time.
-    const chatGroup = group ?? groupNames?.split(",")[0]?.trim() ?? "";
+  const { user } = useAuth();
+
+  /**
+   * The client's name, linked to its conversation from a given date where the
+   * account may read that group's chats. Metrics and chats are granted apart:
+   * a link without the right opened /chat, which bounced back to this page.
+   */
+  const clientCell = (client: string, groupNames: string | null, from: string): ReactNode => {
+    // A client can belong to several groups; the chat screen shows one at a
+    // time, so the link takes the first one whose chats are granted.
+    const candidates = group ? [group] : (groupNames ?? "").split(",").map((g) => g.trim());
+    const chatGroup = candidates.find((g) => g && (user?.unrestricted || user?.chatGroups.includes(g)));
+    if (!chatGroup) {
+      return client;
+    }
     const params = new URLSearchParams({
       group: chatGroup,
       user: client,
       start: dayjs(from).format("YYYY-MM-DD"),
       end: endStr,
     });
-    return `/chat?${params}`;
+    return (
+      <Link to={`/chat?${params}`} target="_blank">
+        {client}
+      </Link>
+    );
   };
 
   const clientColumns: ColumnsType<ClientStat> = [
     {
       title: "Клиент",
       dataIndex: "client",
-      render: (client: string, r) => (
-        <Link to={chatLink(client, r.groupNames, startStr)} target="_blank">
-          {client}
-        </Link>
-      ),
+      render: (client: string, r) => clientCell(client, r.groupNames, startStr),
     },
     { title: "Группа", dataIndex: "groupNames", ellipsis: true },
     { title: "Заявок", dataIndex: "tickets", align: "right", sorter: (a, b) => a.tickets - b.tickets },
@@ -1013,7 +1025,7 @@ export default function MetricsPage() {
         end={endStr}
         group={group}
         backlog={backlog}
-        chatLink={chatLink}
+        clientCell={clientCell}
       />
     </Space>
   );

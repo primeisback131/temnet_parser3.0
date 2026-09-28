@@ -1,10 +1,13 @@
 package com.temnet.temnet_parser.security;
 
 import com.temnet.temnet_parser.repository.UserRepository;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -18,8 +21,12 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfigurationSource;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Session-cookie authentication for the API.
@@ -37,6 +44,22 @@ import org.springframework.web.cors.CorsConfigurationSource;
  */
 @Configuration
 public class SecurityConfig {
+
+    /**
+     * A 403 from the chain says why: a missing or stale CSRF token is not a
+     * missing right, and the fix is a page reload. Without a body the screen
+     * showed "no access" for both.
+     */
+    static void denied(HttpServletRequest request, HttpServletResponse response, AccessDeniedException e)
+            throws IOException {
+        String message = e instanceof CsrfException
+                ? "Сессия устарела, обновите страницу"
+                : "Нет доступа к этому разделу";
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.getWriter().write("{\"message\":\"" + message + "\"}");
+    }
 
     private static CsrfTokenRequestAttributeHandler eagerCsrfHandler() {
         CsrfTokenRequestAttributeHandler handler = new CsrfTokenRequestAttributeHandler();
@@ -118,7 +141,9 @@ public class SecurityConfig {
                                 "/help-accounts", "/help-accounts/**")
                         .hasAnyRole("ADMIN", "MANAGER")
                         .anyRequest().authenticated())
-                .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .exceptionHandling(e -> e
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                        .accessDeniedHandler(SecurityConfig::denied))
                 .logout(l -> l.disable())
                 .httpBasic(b -> b.disable())
                 .formLogin(f -> f.disable())

@@ -7,6 +7,10 @@ import type { CurrentUser } from "./api/types";
 interface AuthState {
   user: CurrentUser | null;
   loading: boolean;
+  /** The startup check failed for another reason than "not signed in": the server is unreachable. */
+  startupError: Error | null;
+  /** Repeats the startup check. */
+  retry: () => void;
   /** The last session ended on its own (expired or the account was disabled). */
   sessionExpired: boolean;
   login: (username: string, password: string) => Promise<void>;
@@ -31,22 +35,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [startupError, setStartupError] = useState<Error | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   const userRef = useRef(user);
   userRef.current = user;
 
-  useEffect(() => {
+  // Only a 401 means "not signed in". Anything else (server down, no
+  // network) used to drop the user on the login screen as if logged out.
+  const check = useCallback(() => {
+    setLoading(true);
     api
       .me()
-      .then(setUser)
+      .then((me) => {
+        setStartupError(null);
+        setUser(me);
+      })
       .catch((e) => {
-        if (!(e instanceof UnauthorizedError)) {
+        if (e instanceof UnauthorizedError) {
+          setStartupError(null);
+        } else {
           console.error(e);
+          setStartupError(e instanceof Error ? e : new Error(String(e)));
         }
         setUser(null);
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(check, [check]);
 
   // The backend answered 401 to a call made for a signed-in user: the session
   // is gone. Drop the user and every cached answer, and say why on the login
@@ -93,6 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       user,
       loading,
+      startupError,
+      retry: check,
       sessionExpired,
       login,
       logout,
@@ -101,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       canViewMetrics: privileged,
       canExport: privileged,
     };
-  }, [user, loading, sessionExpired, login, logout, refresh]);
+  }, [user, loading, startupError, check, sessionExpired, login, logout, refresh]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
