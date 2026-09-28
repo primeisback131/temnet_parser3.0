@@ -18,6 +18,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useThemeMode } from "../theme";
 import BrandMark from "./BrandMark";
+import PageErrorBoundary from "./PageErrorBoundary";
 import ChangePasswordForm from "./ChangePasswordForm";
 
 const { Header, Sider, Content } = Layout;
@@ -66,10 +67,11 @@ export default function AppLayout() {
 
   const flat = sections.flatMap((s) => s.items);
 
-  // Longest key first: /users must not swallow /admin/users.
-  const selected =
-    [...flat].sort((a, b) => b.key.length - a.key.length).find((i) => location.pathname.startsWith(i.key))
-      ?.key ?? flat[0]?.key;
+  // Longest key first: /users must not swallow /admin/users. A path matching
+  // no allowed section is a "no access" page: nothing is highlighted then.
+  const selected = [...flat]
+    .sort((a, b) => b.key.length - a.key.length)
+    .find((i) => location.pathname.startsWith(i.key))?.key;
 
   const menuItems: MenuItem[] = sections.map((section) => ({
     type: "group",
@@ -138,7 +140,9 @@ export default function AppLayout() {
           </div>
         </Header>
         <Content className="app-content">
-          <Outlet />
+          <PageErrorBoundary key={location.pathname}>
+            <Outlet />
+          </PageErrorBoundary>
         </Content>
       </Layout>
 

@@ -2,8 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Tag } from "antd";
 import type { ColumnType } from "antd/es/table";
 import dayjs from "dayjs";
+import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import { Link } from "react-router-dom";
 import { useBacklogTickets, useClientMessages, useTicketDetails } from "../api/queries";
 import type { BacklogReport, ClientMessages, OpenTicket, TicketDetail } from "../api/types";
 import type { Breakdown, DrillSpec } from "../components/MetricDrawer";
@@ -38,7 +38,8 @@ interface Props {
   end: string;
   group: string | null;
   backlog: BacklogReport | undefined;
-  chatLink: (client: string, groupNames: string | null, from: string) => string;
+  /** The client's name, a chat link where the account may read that chat. */
+  clientCell: (client: string, groupNames: string | null, from: string) => ReactNode;
 }
 
 const num = (n: number) => n.toLocaleString("ru-RU");
@@ -130,7 +131,7 @@ type TicketField =
   | "reopened"
   | "silent";
 
-export default function MetricDrill({ drill, onClose, start, end, group, backlog, chatLink }: Props) {
+export default function MetricDrill({ drill, onClose, start, end, group, backlog, clientCell }: Props) {
   const { mode } = useThemeMode();
   const c = chartColors(mode);
   const queryClient = useQueryClient();
@@ -181,11 +182,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
         title: "Клиент",
         dataIndex: "client",
         sorter: (a, b) => a.client.localeCompare(b.client),
-        render: (client: string, t) => (
-          <Link to={chatLink(client, t.groupNames, t.openedAt)} target="_blank">
-            {client}
-          </Link>
-        ),
+        render: (client: string, t) => clientCell(client, t.groupNames, t.openedAt),
       },
       excel: (t) => ({ Клиент: t.client }),
     },
@@ -309,11 +306,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
     title: "Клиент",
     dataIndex: "client",
     sorter: (a, b) => a.client.localeCompare(b.client),
-    render: (client: string, r) => (
-      <Link to={chatLink(client, r.groupNames, start)} target="_blank">
-        {client}
-      </Link>
-    ),
+    render: (client: string, r) => clientCell(client, r.groupNames, start),
   };
   const clients = {
     rows: messages.data ?? [],
@@ -559,11 +552,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
                 title: "Клиент",
                 dataIndex: "client",
                 sorter: (a, b) => a.client.localeCompare(b.client),
-                render: (client: string, t) => (
-                  <Link to={chatLink(client, t.groupNames, t.openedAt)} target="_blank">
-                    {client}
-                  </Link>
-                ),
+                render: (client: string, t) => clientCell(client, t.groupNames, t.openedAt),
               },
               {
                 title: "Открыта",

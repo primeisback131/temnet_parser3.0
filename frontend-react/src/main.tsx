@@ -11,6 +11,8 @@ import "./styles.css";
 import App from "./App";
 import { ApiError } from "./api/client";
 import { AuthProvider } from "./auth";
+import GlobalErrors from "./components/GlobalErrors";
+import PageErrorBoundary from "./components/PageErrorBoundary";
 import { buildTheme } from "./lib/antdTheme";
 import { applyThemeMode, initialThemeMode, ThemeModeProvider, useThemeMode } from "./theme";
 
@@ -26,7 +28,7 @@ const queryClient = new QueryClient({
       // One retry for flaky networks and server hiccups; a 4xx is the
       // backend's final word (no session, no rights, bad parameters).
       retry: (failureCount, error) =>
-        failureCount < 1 && !(error instanceof ApiError && error.status < 500),
+        failureCount < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500),
     },
   },
 });
@@ -39,11 +41,15 @@ function ThemedApp() {
       {/* antd's App provides the message/notification context - the static
           message API silently does nothing under React 19. */}
       <AntApp>
-        <BrowserRouter>
-          <AuthProvider>
-            <App />
-          </AuthProvider>
-        </BrowserRouter>
+        <GlobalErrors />
+        {/* Last resort; pages have their own boundary inside the layout. */}
+        <PageErrorBoundary>
+          <BrowserRouter>
+            <AuthProvider>
+              <App />
+            </AuthProvider>
+          </BrowserRouter>
+        </PageErrorBoundary>
       </AntApp>
     </ConfigProvider>
   );

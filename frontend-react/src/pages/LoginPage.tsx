@@ -21,8 +21,11 @@ export default function LoginPage() {
         setError("Неверный логин или пароль");
       } else if (e instanceof TooManyRequestsError) {
         setError(e.message);
-      } else if (e instanceof ApiError) {
+      } else if (e instanceof ApiError && e.status > 0 && e.status < 500) {
         setError(`Сервер ответил ошибкой: ${e.message}`);
+      } else if (e instanceof ApiError) {
+        // No connection or the server is down: the message already says so.
+        setError(e.message);
       } else {
         setError("Сервер недоступен, попробуйте позже");
       }

@@ -1,3 +1,5 @@
+import { describeError, isStaleBuild } from "./errors";
+
 /** One titled table; a sheet can stack several of them. */
 export interface TableSpec {
   title?: string;
@@ -61,12 +63,31 @@ function download(blob: Blob, fileName: string): void {
  * download. Column headers are taken from the keys of each table's first row.
  */
 export async function exportWorkbook(sheets: SheetSpec[], fileName: string): Promise<void> {
-  const buffer = await buildWorkbook(sheets);
+  const buffer = await loaded(buildWorkbook(sheets));
   const blob = new Blob([buffer], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   download(blob, fileName.endsWith(".xlsx") ? fileName : `${fileName}.xlsx`);
 }
+
+/**
+ * The result, or an error that says which action failed: the ExcelJS and
+ * JSZip chunks load on first use and are gone after a redeploy, and their own
+ * message is English browser text.
+ */
+async function loaded<T>(work: Promise<T>): Promise<T> {
+  try {
+    return await work;
+  } catch (e) {
+    throw new Error(
+      isStaleBuild(e)
+        ? "Не удалось выгрузить Excel - обновите страницу"
+        : `Не удалось выгрузить Excel: ${lowerFirst(describeError(e))}`,
+    );
+  }
+}
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 
 /** One .xlsx file inside a zip archive. */
 export interface WorkbookFile {
@@ -76,11 +97,11 @@ export interface WorkbookFile {
 
 /** Build several .xlsx workbooks and download them as a single .zip archive. */
 export async function exportWorkbooksZip(files: WorkbookFile[], zipName: string): Promise<void> {
-  const JSZip = (await import("jszip")).default;
+  const JSZip = (await loaded(import("jszip"))).default;
   const zip = new JSZip();
   for (const file of files) {
     const name = file.name.endsWith(".xlsx") ? file.name : `${file.name}.xlsx`;
-    zip.file(name, await buildWorkbook(file.sheets));
+    zip.file(name, await loaded(buildWorkbook(file.sheets)));
   }
   const blob = await zip.generateAsync({ type: "blob" });
   download(blob, zipName.endsWith(".zip") ? zipName : `${zipName}.zip`);

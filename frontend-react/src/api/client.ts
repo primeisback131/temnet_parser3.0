@@ -52,6 +52,14 @@ export class ApiError extends Error {
   }
 }
 
+/** No answer at all: the network is down or the browser could not reach the server. */
+export class NetworkError extends ApiError {
+  constructor() {
+    super(0, "Нет связи с сервером");
+    this.name = "NetworkError";
+  }
+}
+
 /** 401: no valid session (or wrong credentials on the login call). */
 export class UnauthorizedError extends ApiError {
   constructor(message = "Требуется вход") {
@@ -119,16 +127,22 @@ async function request<T>(path: string, init: RequestInit, params?: Record<strin
     }
   }
   const method = init.method ?? "GET";
-  const res = await fetch(url.toString(), {
-    ...init,
-    // The session rides in a cookie, so every call must carry credentials.
-    credentials: "include",
-    headers: {
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" ? {} : { "X-XSRF-TOKEN": csrfToken() }),
-      ...init.headers,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url.toString(), {
+      ...init,
+      // The session rides in a cookie, so every call must carry credentials.
+      credentials: "include",
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(method === "GET" ? {} : { "X-XSRF-TOKEN": csrfToken() }),
+        ...init.headers,
+      },
+    });
+  } catch {
+    // fetch rejects only when no answer arrived; its own text is "Failed to fetch".
+    throw new NetworkError();
+  }
   if (!res.ok) {
     const message = await errorMessage(res);
     switch (res.status) {
@@ -146,6 +160,11 @@ async function request<T>(path: string, init: RequestInit, params?: Record<strin
       case 429:
         throw new TooManyRequestsError(message ?? undefined);
       default:
+        // A 5xx without the backend's JSON is the proxy talking: the backend
+        // is down or restarting (DevTools, a deploy). Its own 500s say so.
+        if (res.status >= 500 && message == null) {
+          throw new ApiError(res.status, "Сервер недоступен или перезапускается, повторите через минуту");
+        }
         throw new ApiError(res.status, message ?? `Запрос ${path} вернул ${res.status}`);
     }
   }
