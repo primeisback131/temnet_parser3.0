@@ -44,7 +44,7 @@ frontend-react              React-приложение (Vite dev на порту
 run_backend.bat             запуск backend (Gradle wrapper; JDK 25 скачивается сам)
 run_frontend.bat            запуск frontend (npm install + npm run dev, нужен Node 18+)
 run_frontend_prod.bat       сборка frontend и раздача собранной версии (для доступа из сети)
-install_services.bat        регистрация backend и frontend как служб Windows (NSSM)
+install_services.bat        backend и frontend как службы Windows (NSSM), логика в install_services.ps1
 ```
 
 ## Запуск
@@ -85,37 +85,42 @@ run_frontend_prod.bat
 грузится быстро. После обновления кода перезапустить, пересборка входит в скрипт.
 
 **Как служба Windows** (сервер перезагружается сам, приложение должно
-подниматься без входа пользователя). Нужен [NSSM](https://nssm.cc) на
-`PATH`, на Windows 10 — сборка
-[2.24-101](https://nssm.cc/ci/nssm-2.24-101-g897c7ad.zip): релиз 2.24 там
-службы не запускает. `nssm.exe` положить в постоянную папку (например
-`C:\nssm`): службы запускаются через него по этому пути. Закрыть
-`run_backend.bat` и `run_frontend_prod.bat`, затем из консоли
-администратора в корне репозитория:
+подниматься без входа пользователя): после `git pull` запустить
+`install_services.bat`, достаточно двойного щелчка. Скрипт
+(`install_services.ps1`) сам:
 
-```bat
-install_services.bat .\user password
-```
+- запрашивает права администратора;
+- если NSSM ещё нет, скачивает сборку 2.24-101 (релиз 2.24 на Windows 10
+  службы не запускает), сверяет SHA-256, кладёт в `C:\Program Files\nssm` и
+  добавляет эту папку в системный `PATH`;
+- спрашивает учётку службы (по умолчанию текущий пользователь, `LocalSystem`
+  без пароля) и пароль, неверный отклоняет сразу;
+- останавливает запущенные вручную `run_backend.bat` и
+  `run_frontend_prod.bat`: процессы этого репозитория на портах 8080 и 5173;
+  если порт занят чужим процессом, отказывается;
+- переносит в службу backend переменные, которые читает
+  `application.properties`, из текущего окружения и из `run_backend_local.bat`,
+  плюс `PATH` (у frontend первым в нём Node 18+): служба от LocalSystem не
+  видит пользовательских переменных, а при старте вместе с сервером может не
+  быть и `APPDATA`, по которому ищется nvm;
+- собирает boot jar и регистрирует `temnet-backend` (jar под JDK 25, без
+  Gradle и DevTools, ждёт службу MariaDB) и `temnet-frontend` (тот же
+  `run_frontend_prod.bat`) с отложенным автозапуском и перезапуском после
+  падения;
+- ждёт ответа backend (`/api/auth/me` → 401) и frontend (`:5173` → 200), при
+  сбое показывает хвост лога.
 
-Скрипт собирает boot jar и регистрирует службы `temnet-backend` (jar под
-JDK 25, без Gradle и DevTools) и `temnet-frontend` (тот же
-`run_frontend_prod.bat`), обе с отложенным автозапуском и перезапуском
-после падения; backend ждёт службу MariaDB. Учётка — та, из-под которой
-bat-файлы запускают вручную: `with-node.cjs` ищет Node 18+ в её nvm. Без
-аргументов новая служба работает от LocalSystem, и Node 18+ должен быть в
-системном `PATH`. Переменные окружения backend, отличные от умолчаний
-(`DB_PASSWORD` и т. п.), задаются в `nssm edit temnet-backend`, вкладка
-Environment; повторный запуск скрипта их не трогает. Логи —
-`logs\backend.log` и `logs\frontend.log`, при каждом старте службы прежний
-файл откладывается с отметкой времени в имени.
+Логи — `logs\backend.log` и `logs\frontend.log`, при каждом старте службы
+прежний файл откладывается с отметкой времени в имени. Переменные,
+добавленные вручную в `nssm edit temnet-backend` (вкладка Environment),
+повторный запуск сохраняет.
 
-Обновление после `git pull`, тоже из консоли администратора: если менялся
-только frontend — `nssm restart temnet-frontend`; после Java-изменений —
-снова `install_services.bat` (без аргументов учётка остаётся прежней): он
-останавливает службы, пересобирает jar и запускает их. Проверка после
-перезагрузки сервера: `sc query temnet-backend` и
-`curl http://localhost:8080/api/auth/me` (401 — живой). Снять службы:
-`install_services.bat remove`.
+Обновление после `git pull`: если менялся только frontend —
+`nssm restart temnet-frontend` из консоли администратора; после
+Java-изменений — снова `install_services.bat` (Enter на вопросе об учётке
+оставляет прежнюю). Проверка после перезагрузки сервера:
+`sc query temnet-backend` и `curl http://localhost:8080/api/auth/me` (401 —
+живой). Снять службы: `install_services.bat remove`.
 
 Настройки через переменные окружения (все опциональны):
 
