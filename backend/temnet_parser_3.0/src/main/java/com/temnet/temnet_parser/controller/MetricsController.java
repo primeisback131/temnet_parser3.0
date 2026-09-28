@@ -5,6 +5,7 @@ import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
@@ -14,6 +15,7 @@ import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.dto.TicketDetails;
 import com.temnet.temnet_parser.security.AccessControlService;
 import com.temnet.temnet_parser.security.AccessControlService.Area;
 import com.temnet.temnet_parser.service.MetricsService;
@@ -135,6 +137,33 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
         return metricsService.summary(start, end, scope(groupName));
+    }
+
+    /** Tickets opened in the period, behind the summary cards. */
+    @GetMapping("/tickets/opened")
+    public TicketDetails ticketsOpened(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.ticketDetails(start, end, scope(groupName), false);
+    }
+
+    /** Tickets closed or rejected in the period, behind the closed and rejected cards. */
+    @GetMapping("/tickets/closed")
+    public TicketDetails ticketsClosed(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.ticketDetails(start, end, scope(groupName), true);
+    }
+
+    /** Messages of the period per client, behind the message cards. */
+    @GetMapping("/clients/messages")
+    public List<ClientMessages> clientMessages(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.clientMessages(start, end, scope(groupName));
     }
 
     /** Clients with the most tickets in the period. */

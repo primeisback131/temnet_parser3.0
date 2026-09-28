@@ -198,6 +198,7 @@ export interface OpenTicket {
   client: string;
   groupNames: string | null;
   openedAt: string;
+  ageDays: number; // calendar days from opening to the period end, as backlog.sql counts them
   lastActivity: string;
   category: string;
   messagesIn: number;
@@ -205,6 +206,53 @@ export interface OpenTicket {
   firstResponder: string | null;
   finalStatus: "open" | "closed" | "rejected" | "expired"; // what happened later
   closedAt: string | null;
+}
+
+/**
+ * One ticket behind a ticket card. `status` is the effective one (an abandoned
+ * ticket reads "expired"); the booleans are the per-row forms of the summary
+ * counts. Durations are working seconds.
+ */
+export interface TicketDetail {
+  client: string;
+  groupNames: string | null;
+  openedAt: string;
+  lastActivity: string;
+  closedAt: string | null;
+  status: "open" | "closed" | "rejected" | "expired";
+  category: string;
+  messagesIn: number;
+  messagesOut: number;
+  firstResponder: string | null;
+  frtSeconds: number | null;
+  closedBy: string | null;
+  resolutionSeconds: number | null;
+  noReply: boolean;
+  awaiting: boolean; // the client was waiting for a reply when it went quiet
+  thanked: boolean;
+  reopened: boolean; // a later ticket was a probable repeat of this one
+  answered: boolean;
+  answeredFast: boolean;
+  answeredHour: boolean;
+  resolved: boolean;
+  resolvedHour: boolean;
+  resolvedDay: boolean;
+}
+
+/** The tickets behind a card; `truncated` - the list hit the server's cap and holds only the newest. */
+export interface TicketDetails {
+  tickets: TicketDetail[];
+  truncated: boolean;
+}
+
+/** A client's messages in the period; off-hours incoming split into weekday nights and weekends. */
+export interface ClientMessages {
+  client: string;
+  groupNames: string | null;
+  messagesIn: number;
+  messagesOut: number;
+  offHoursNight: number;
+  offHoursWeekend: number;
 }
 
 export type Bucket = "day" | "week" | "month";

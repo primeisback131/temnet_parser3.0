@@ -1,8 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 // Did the page render at all, with a clean console? A green `tsc` and a green
-// Vite build say nothing about that. The API is mocked with empty data: the
-// test checks the rendering path, not the numbers.
+// Vite build say nothing about that. The API is mocked, mostly with empty data
+// (the metric drill-downs get a few rows): the test checks the rendering path,
+// not the numbers.
 
 const admin = {
   username: "admin",
@@ -110,6 +111,53 @@ const objects: Record<string, unknown> = {
   },
 };
 
+// Rows behind the metric cards: two organizations and a client without one,
+// so the drill-downs render their per-organization split.
+const ticket = (client: string, groupNames: string | null, status: string, extra: object = {}) => ({
+  client,
+  groupNames,
+  openedAt: "2026-08-03T09:10:00",
+  lastActivity: "2026-08-03T11:00:00",
+  closedAt: status === "closed" || status === "rejected" ? "2026-08-03T10:40:00" : null,
+  status,
+  category: "Принтеры",
+  messagesIn: 3,
+  messagesOut: 2,
+  firstResponder: "help-1",
+  frtSeconds: 600,
+  closedBy: status === "closed" || status === "rejected" ? "help-1" : null,
+  resolutionSeconds: status === "closed" ? 5400 : null,
+  noReply: false,
+  awaiting: false,
+  thanked: status === "closed",
+  reopened: false,
+  answered: true,
+  answeredFast: true,
+  answeredHour: true,
+  resolved: status === "closed",
+  resolvedHour: false,
+  resolvedDay: status === "closed",
+  ...extra,
+});
+const tickets = [
+  ticket("u1.alpha", "Альфа", "closed"),
+  ticket("u2.alpha", "Альфа", "expired", { noReply: true, firstResponder: null, frtSeconds: null, answered: false }),
+  ticket("u1.beta", "Бета", "rejected", { openedAt: "2026-08-04T20:00:00" }),
+  ticket("u2.beta", "Бета", "open", { frtSeconds: 2400, answeredFast: false }),
+  ticket("stray", null, "expired", { awaiting: true }),
+];
+const lists: Record<string, unknown> = {
+  "/api/metrics/tickets/opened": { tickets, truncated: false },
+  "/api/metrics/tickets/closed": { tickets: tickets.filter((t) => t.closedAt), truncated: false },
+  "/api/metrics/clients/messages": [
+    { client: "u1.alpha", groupNames: "Альфа", messagesIn: 12, messagesOut: 9, offHoursNight: 2, offHoursWeekend: 1 },
+    { client: "u1.beta", groupNames: "Бета", messagesIn: 4, messagesOut: 5, offHoursNight: 0, offHoursWeekend: 0 },
+  ],
+  "/api/metrics/backlog/tickets": [
+    { ...ticket("u2.beta", "Бета", "open"), ageDays: 2, finalStatus: "closed", closedAt: "2026-08-05T10:00:00" },
+  ],
+};
+
 async function mockApi(page: Page, me: unknown | null) {
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -118,7 +166,7 @@ async function mockApi(page: Page, me: unknown | null) {
         ? route.fulfill({ json: me })
         : route.fulfill({ status: 401, json: { message: "Требуется вход" } });
     }
-    return route.fulfill({ json: objects[path] ?? [] });
+    return route.fulfill({ json: objects[path] ?? lists[path] ?? [] });
   });
 }
 
@@ -169,3 +217,38 @@ for (const [path, title] of pages) {
     expect(errors).toEqual([]);
   });
 }
+
+// Card, the title of the drawer it opens, a client in that drawer's default list.
+const cards: [string, string, string][] = [
+  ["Сообщений", "Сообщения", "u1.alpha"],
+  ["Закрыто заявок", "Закрытые заявки", "u1.alpha"],
+  ["Отклонено", "Отклонённые заявки", "u1.beta"],
+  ["Открытых заявок", "Открытые заявки на", "u2.beta"],
+  ["Без ответа", "Без ответа", "u2.alpha"],
+  ["Истекли по тишине", "Истекли по тишине", "u2.alpha"],
+  ["Ответ за 15 мин", "Первый ответ за 15 мин", "u2.beta"],
+  ["Решено за час", "Решено за час", "u1.alpha"],
+  ["Благодарностей", "Благодарности", "u1.alpha"],
+  ["Вне рабочего времени", "Вне рабочего времени", "u1.alpha"],
+];
+
+test("каждая карточка метрик открывает свою детализацию по организациям", async ({ page }) => {
+  const errors = watchConsole(page);
+  await mockApi(page, admin);
+  await page.goto("/metrics");
+  for (const [card, title, client] of cards) {
+    await page.locator(".stat-card", { hasText: card }).click();
+    const drawer = page.locator(".ant-drawer-content");
+    await expect(drawer.locator(".ant-drawer-title")).toContainText(title);
+    // "All groups" is selected, so the rows are split by organization.
+    await expect(drawer.getByRole("cell", { name: /^(Альфа|Бета)$/ }).first()).toBeVisible();
+    // The flat list renders the card's own ticket columns. The pointer is
+    // moved off the table first: a header's sort tooltip covers the switch.
+    await page.mouse.move(0, 0);
+    await drawer.getByText("Одним списком").click();
+    await expect(drawer.getByRole("link", { name: client })).toBeVisible();
+    await page.locator(".ant-drawer-close").click();
+    await expect(drawer).toBeHidden();
+  }
+  expect(errors).toEqual([]);
+});

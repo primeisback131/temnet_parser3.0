@@ -89,6 +89,7 @@ export function useBacklogTickets(end: string, groupName: string | null, enabled
     queryKey: ["backlogTickets", end, groupName],
     queryFn: () => api.getBacklogTickets(end, groupName ?? undefined),
     enabled,
+    staleTime: DRILL_STALE_MS,
   });
 }
 
@@ -169,6 +170,38 @@ export function useClients(start: string, end: string, groupName: string | null)
   return useQuery({
     queryKey: ["clients", start, end, groupName],
     queryFn: () => api.getClients(start, end, groupName ?? undefined),
+  });
+}
+
+/**
+ * Drill-down lists are big (up to tens of MB before gzip) and several cards
+ * share one: kept for a while instead of refetched on every card opened.
+ */
+const DRILL_STALE_MS = 5 * 60 * 1000;
+
+/** The tickets behind the ticket cards; fetched only once a card is opened. */
+export function useTicketDetails(
+  start: string,
+  end: string,
+  cohort: "opened" | "closed",
+  groupName: string | null,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["ticketDetails", start, end, cohort, groupName],
+    queryFn: () => api.getTicketDetails(start, end, cohort, groupName ?? undefined),
+    enabled,
+    staleTime: DRILL_STALE_MS,
+  });
+}
+
+/** Messages per client behind the message cards; fetched only once a card is opened. */
+export function useClientMessages(start: string, end: string, groupName: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["clientMessages", start, end, groupName],
+    queryFn: () => api.getClientMessages(start, end, groupName ?? undefined),
+    enabled,
+    staleTime: DRILL_STALE_MS,
   });
 }
 

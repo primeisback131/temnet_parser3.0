@@ -1,7 +1,6 @@
 import {
   CheckCircleOutlined,
   FieldTimeOutlined,
-  FileExcelOutlined,
   HourglassOutlined,
   InboxOutlined,
   LikeOutlined,
@@ -12,12 +11,10 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import {
-  Button,
   Card,
   Col,
   DatePicker,
   Empty,
-  Modal,
   Row,
   Segmented,
   Select,
@@ -35,7 +32,6 @@ import { Link } from "react-router-dom";
 import {
   useAlerts,
   useBacklog,
-  useBacklogTickets,
   useCategories,
   useCategoryTimeseries,
   useClients,
@@ -47,17 +43,18 @@ import {
   useSummary,
   useTimeseries,
 } from "../api/queries";
-import type { Bucket, CategoryCount, ClientStat, OpenTicket } from "../api/types";
+import type { Bucket, CategoryCount, ClientStat } from "../api/types";
 import EChart from "../components/EChart";
 import QueryError from "../components/QueryError";
 import StatCard from "../components/StatCard";
 import { areaFade, barFade, barFadeX, chartColors, dot, legendTop } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
-import { exportToExcel } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
 import { tint } from "../lib/palette";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { useThemeMode } from "../theme";
+import type { DrillKey } from "./MetricDrill";
+import MetricDrill from "./MetricDrill";
 
 const { RangePicker } = DatePicker;
 
@@ -179,12 +176,7 @@ export default function MetricsPage() {
   // The period reaches past the data: the count describes the last day with
   // messages, not the requested end.
   const backlogClamped = backlog != null && dayjs(backlog.asOf).isBefore(dayjs(endStr), "day");
-  const [openTicketsShown, setOpenTicketsShown] = useState(false);
-  const { data: openTickets = [], isFetching: openTicketsLoading } = useBacklogTickets(
-    endStr,
-    group,
-    openTicketsShown,
-  );
+  const [drill, setDrill] = useState<DrillKey | null>(null);
 
   /** Deep link to a client's conversation on the chat screen, from a given date. */
   const chatLink = (client: string, groupNames: string | null, from: string) => {
@@ -199,66 +191,6 @@ export default function MetricsPage() {
     return `/chat?${params}`;
   };
 
-  const openTicketColumns: ColumnsType<OpenTicket> = [
-    {
-      title: "Клиент",
-      dataIndex: "client",
-      sorter: (a, b) => a.client.localeCompare(b.client),
-      render: (client: string, t) => (
-        <Link to={chatLink(client, t.groupNames, t.openedAt)} target="_blank">
-          {client}
-        </Link>
-      ),
-    },
-    { title: "Группа", dataIndex: "groupNames" },
-    {
-      title: "Открыта",
-      dataIndex: "openedAt",
-      defaultSortOrder: "ascend",
-      sorter: (a, b) => a.openedAt.localeCompare(b.openedAt),
-      render: (v: string) => dayjs(v).format("DD.MM.YYYY HH:mm"),
-    },
-    {
-      title: "Последнее сообщение",
-      dataIndex: "lastActivity",
-      sorter: (a, b) => a.lastActivity.localeCompare(b.lastActivity),
-      render: (v: string) => dayjs(v).format("DD.MM.YYYY HH:mm"),
-    },
-    { title: "Категория", dataIndex: "category" },
-    {
-      title: "Сообщений",
-      key: "messages",
-      sorter: (a, b) => a.messagesIn + a.messagesOut - (b.messagesIn + b.messagesOut),
-      render: (_, t) => `${t.messagesIn} / ${t.messagesOut}`,
-    },
-    { title: "Первым ответил", dataIndex: "firstResponder" },
-    {
-      title: "Что дальше",
-      key: "outcome",
-      filters: [
-        { text: "Так и не закрыта", value: "open" },
-        { text: "Закрыта позже", value: "closed" },
-        { text: "Отклонена позже", value: "rejected" },
-        { text: "Истекла позже", value: "expired" },
-      ],
-      onFilter: (value, t) => t.finalStatus === value,
-      render: (_, t) => {
-        if (t.finalStatus === "open") return <Tag color="orange">так и не закрыта</Tag>;
-        const label =
-          t.finalStatus === "closed"
-            ? "закрыта"
-            : t.finalStatus === "rejected"
-              ? "отклонена"
-              : "истекла";
-        return (
-          <span>
-            {label}
-            {t.closedAt ? ` ${dayjs(t.closedAt).format("DD.MM.YYYY")}` : ""}
-          </span>
-        );
-      },
-    },
-  ];
   const clientColumns: ColumnsType<ClientStat> = [
     {
       title: "Клиент",
@@ -763,6 +695,7 @@ export default function MetricsPage() {
             icon={<MessageOutlined />}
             accent={c.blue}
             soft={tint(c.blue, 0.14)}
+            onClick={() => setDrill("messages")}
           />
         </Col>
         <Col xs={12} lg={6}>
@@ -772,6 +705,7 @@ export default function MetricsPage() {
             icon={<CheckCircleOutlined />}
             accent={c.green}
             soft={tint(c.green, 0.14)}
+            onClick={() => setDrill("closed")}
           />
         </Col>
         <Col xs={12} lg={6}>
@@ -781,6 +715,7 @@ export default function MetricsPage() {
             icon={<StopOutlined />}
             accent={c.rose}
             soft={tint(c.rose, 0.14)}
+            onClick={() => setDrill("rejected")}
           />
         </Col>
         <Col xs={12} lg={6}>
@@ -798,7 +733,7 @@ export default function MetricsPage() {
                 icon={<InboxOutlined />}
                 accent={c.amber}
                 soft={tint(c.amber, 0.14)}
-                onClick={() => setOpenTicketsShown(true)}
+                onClick={() => setDrill("open")}
               />
             </div>
           </Tooltip>
@@ -814,6 +749,7 @@ export default function MetricsPage() {
             icon={<QuestionCircleOutlined />}
             accent={c.rose}
             soft={tint(c.rose, 0.14)}
+            onClick={() => setDrill("unanswered")}
           />
         </Col>
         <Col xs={12} md={8} xl={4}>
@@ -824,6 +760,7 @@ export default function MetricsPage() {
             icon={<HourglassOutlined />}
             accent={c.amber}
             soft={tint(c.amber, 0.14)}
+            onClick={() => setDrill("expired")}
           />
         </Col>
         <Col xs={12} md={8} xl={4}>
@@ -834,6 +771,7 @@ export default function MetricsPage() {
             icon={<ThunderboltOutlined />}
             accent={c.green}
             soft={tint(c.green, 0.14)}
+            onClick={() => setDrill("fast")}
           />
         </Col>
         <Col xs={12} md={8} xl={4}>
@@ -844,6 +782,7 @@ export default function MetricsPage() {
             icon={<FieldTimeOutlined />}
             accent={c.blue}
             soft={tint(c.blue, 0.14)}
+            onClick={() => setDrill("resolved")}
           />
         </Col>
         <Col xs={12} md={8} xl={4}>
@@ -854,6 +793,7 @@ export default function MetricsPage() {
             icon={<LikeOutlined />}
             accent={c.violet}
             soft={tint(c.violet, 0.14)}
+            onClick={() => setDrill("thanked")}
           />
         </Col>
         <Col xs={12} md={8} xl={4}>
@@ -864,6 +804,7 @@ export default function MetricsPage() {
             icon={<MoonOutlined />}
             accent={c.cyan}
             soft={tint(c.cyan, 0.14)}
+            onClick={() => setDrill("offHours")}
           />
         </Col>
       </Row>
@@ -1063,62 +1004,17 @@ export default function MetricsPage() {
         )}
       </Card>
 
-      <Modal
-        title={`Открытые заявки на ${dayjs(backlog?.asOf ?? endStr).format("DD.MM.YYYY")}`}
-        open={openTicketsShown}
-        onCancel={() => setOpenTicketsShown(false)}
-        width={1100}
-        footer={
-          <Space>
-            <Button
-              icon={<FileExcelOutlined />}
-              disabled={openTickets.length === 0}
-              onClick={() =>
-                exportToExcel(
-                  openTickets.map((t) => ({
-                    Клиент: t.client,
-                    Группа: t.groupNames ?? "",
-                    Открыта: dayjs(t.openedAt).format("DD.MM.YYYY HH:mm"),
-                    "Последнее сообщение": dayjs(t.lastActivity).format("DD.MM.YYYY HH:mm"),
-                    Категория: t.category,
-                    "Сообщений клиента": t.messagesIn,
-                    "Сообщений поддержки": t.messagesOut,
-                    "Первым ответил": t.firstResponder ?? "",
-                    "Что дальше": t.finalStatus,
-                    "Закрыта позже": t.closedAt ? dayjs(t.closedAt).format("DD.MM.YYYY HH:mm") : "",
-                  })),
-                  `open_tickets_${group ?? "all"}_${dayjs(backlog?.asOf ?? endStr).format("YYYY-MM-DD")}.xlsx`,
-                  "Открытые заявки",
-                )
-              }
-            >
-              Excel
-            </Button>
-            <Button onClick={() => setOpenTicketsShown(false)}>Закрыть</Button>
-          </Space>
-        }
-      >
-        <p className="meta" style={{ marginTop: 0 }}>
-          Имя клиента открывает его переписку в новой вкладке, начиная с даты открытия заявки.
-        </p>
-        {backlog && backlog.openTickets > 0 && (
-          <p className="meta" style={{ marginTop: 0 }}>
-            Возраст: до 1 дня <b>{num(backlog.ageDay)}</b> · 2-3 дня <b>{num(backlog.ageThreeDays)}</b> · 4-7 дней{" "}
-            <b>{num(backlog.ageWeek)}</b> · 8-30 дней <b>{num(backlog.ageMonth)}</b> · больше месяца{" "}
-            <b>{num(backlog.ageOlder)}</b>
-            {backlog.oldestOpenedAt ? ` · самая старая с ${dayjs(backlog.oldestOpenedAt).format("DD.MM.YYYY")}` : ""}
-          </p>
-        )}
-        <Table
-          rowKey={(t) => `${t.client}_${t.openedAt}`}
-          columns={openTicketColumns}
-          dataSource={openTickets}
-          loading={openTicketsLoading}
-          size="small"
-          pagination={{ pageSize: 20, showSizeChanger: false }}
-          scroll={{ x: true }}
-        />
-      </Modal>
+      {/* Keyed by card, so each one opens with its own filters, not the previous card's. */}
+      <MetricDrill
+        key={drill}
+        drill={drill}
+        onClose={() => setDrill(null)}
+        start={startStr}
+        end={endStr}
+        group={group}
+        backlog={backlog}
+        chatLink={chatLink}
+      />
     </Space>
   );
 }

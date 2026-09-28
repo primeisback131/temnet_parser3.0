@@ -6,6 +6,7 @@ import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
@@ -15,8 +16,12 @@ import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.dto.TicketDetail;
+import com.temnet.temnet_parser.dto.TicketDetails;
 import com.temnet.temnet_parser.security.Scope;
 import com.temnet.temnet_parser.support.SqlLoader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -35,6 +40,8 @@ import java.util.List;
 @Repository
 public class MetricsRepository {
 
+    private static final Logger log = LoggerFactory.getLogger(MetricsRepository.class);
+
     private static final String TIMESERIES_SQL = SqlLoader.load("sql/timeseries.sql");
     private static final String HEATMAP_SQL = SqlLoader.load("sql/heatmap.sql");
     private static final String SLA_SQL = SqlLoader.load("sql/sla.sql");
@@ -47,6 +54,15 @@ public class MetricsRepository {
     private static final String SUMMARY_SQL = SqlLoader.load("sql/summary.sql");
     private static final String CLIENTS_SQL = SqlLoader.load("sql/clients.sql");
     private static final String CATEGORY_TIMESERIES_SQL = SqlLoader.load("sql/category_timeseries.sql");
+    private static final String TICKET_DETAILS_SQL = SqlLoader.load("sql/ticket_details.sql");
+    private static final String CLIENT_MESSAGES_SQL = SqlLoader.load("sql/client_messages.sql");
+
+    // The two ticket cohorts of the drill-down: opened in the period (the
+    // summary's population) and closed or rejected in it (the timeseries'
+    // closing-date counts, same capped end).
+    private static final String OPENED_IN_PERIOD = "t.opened_at >= :start AND t.opened_at < :endExclusive";
+    private static final String CLOSED_IN_PERIOD = "t.closed_at >= :start AND t.closed_at < "
+            + DataHorizon.CAPPED_END + " AND t.status IN ('closed', 'rejected')";
 
 
     // Outlier guards, in WORKING seconds (must match the 10-hour business day
@@ -63,6 +79,14 @@ public class MetricsRepository {
 
     /** Rows of the frequent-clients list; enough to spot the pattern, not a report. */
     private static final int TOP_CLIENTS = 20;
+
+    /**
+     * Guard on a drill-down list: a year of tickets (the screen's default range
+     * is Jan 1 to today) at ~3k a month with headroom, some 22 MB of JSON before
+     * gzip. A cut list comes back flagged, so it never passes for the whole
+     * picture.
+     */
+    private static final int MAX_DETAIL_TICKETS = 45_000;
 
     // Anomaly thresholds: a group alerts on >= 2x its weekly message baseline
     // (with a volume floor to skip tiny groups) or >= 2x its average first
@@ -182,6 +206,46 @@ public class MetricsRepository {
                 .query(new DataClassRowMapper<>(PeriodSummary.class)).single();
     }
 
+    /**
+     * Tickets behind the ticket cards, one row each with the summary's flags:
+     * opened in the period, or (byClosing) closed or rejected in it.
+     */
+    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing) {
+
+        String sql = TICKET_DETAILS_SQL
+                .replace("${period}", byClosing ? CLOSED_IN_PERIOD : OPENED_IN_PERIOD)
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${groupFilter}", ScopeSql.tickets("t", scope))
+                .replace("${reopenScope}", ScopeSql.tickets("r", scope));
+
+        // One row over the cap tells a cut list from one that just fits.
+        List<TicketDetail> rows = withRange(sql, start, end, scope)
+                .param("maxFrtSeconds", MAX_FRT_SECONDS)
+                .param("fastReplySeconds", FAST_REPLY_SECONDS)
+                .param("hourReplySeconds", HOUR_REPLY_SECONDS)
+                .param("maxResolutionSeconds", MAX_RESOLUTION_SECONDS)
+                .param("dayResolutionSeconds", DAY_RESOLUTION_SECONDS)
+                .param("limit", MAX_DETAIL_TICKETS + 1)
+                .query(new DataClassRowMapper<>(TicketDetail.class)).list();
+        if (rows.size() <= MAX_DETAIL_TICKETS) {
+            return new TicketDetails(rows, false);
+        }
+        log.warn("Ticket drill-down cut at {} rows: {}..{}, byClosing={}, scope={}",
+                MAX_DETAIL_TICKETS, start, end, byClosing, scope);
+        return new TicketDetails(List.copyOf(rows.subList(0, MAX_DETAIL_TICKETS)), true);
+    }
+
+    /** Messages of the period per client, behind the message cards. */
+    public List<ClientMessages> clientMessages(LocalDate start, LocalDate end, Scope scope) {
+
+        String sql = CLIENT_MESSAGES_SQL
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${membership}", ScopeSql.messages("m", scope));
+
+        return withRange(sql, start, end, scope)
+                .query(new DataClassRowMapper<>(ClientMessages.class)).list();
+    }
+
     /** Clients with the most tickets opened in the period. */
     public List<ClientStat> clients(LocalDate start, LocalDate end, Scope scope) {
 
@@ -221,7 +285,9 @@ public class MetricsRepository {
 
         String sql = OPERATORS_SQL
                 .replace("${groupFilterMessages}", ScopeSql.messages("m", scope))
-                .replace("${groupFilterTickets}", ScopeSql.tickets("t", scope));
+                .replace("${groupFilterTickets}", ScopeSql.tickets("t", scope))
+                // A desk sees repeats on itself, not on another desk.
+                .replace("${reopenScope}", ScopeSql.tickets("r", scope));
 
         return withRange(sql, start, end, scope)
                 .param("maxReplySeconds", MAX_FRT_SECONDS)

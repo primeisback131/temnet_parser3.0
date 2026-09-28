@@ -25,10 +25,11 @@ LEFT JOIN (
     SELECT t.closed_by AS operator,
            SUM(t.status = 'closed')   AS closed,
            SUM(t.status = 'rejected') AS rejected,
-           SUM(t.thanked)             AS thanked,
+           SUM(t.thanked AND t.status = 'closed') AS thanked,
            SUM(EXISTS (SELECT 1 FROM ticket r
                        WHERE r.reopened_from = t.id
-                         AND (r.reopen_score > 0 OR r.reopen_llm = 'same'))) AS reopened
+                         AND (r.reopen_score > 0 OR r.reopen_llm = 'same')
+                         ${reopenScope})) AS reopened
     FROM ticket t
     WHERE t.closed_at >= :start AND t.closed_at < :endExclusive
       ${groupFilterTickets}
