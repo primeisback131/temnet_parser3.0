@@ -54,7 +54,8 @@ import { humanizeSeconds } from "../lib/format";
 import { tint } from "../lib/palette";
 import { useMediaQuery } from "../lib/useMediaQuery";
 import { useThemeMode } from "../theme";
-import type { DrillKey } from "./MetricDrill";
+import { chatGroupFor } from "../lib/chatAccess";
+import type { DrillKey } from "../lib/drillEvents";
 import MetricDrill from "./MetricDrill";
 
 const { RangePicker } = DatePicker;
@@ -182,24 +183,29 @@ export default function MetricsPage() {
   const { user } = useAuth();
 
   /**
-   * The client's name, linked to its conversation from a given date where the
-   * account may read that group's chats. Metrics and chats are granted apart:
-   * a link without the right opened /chat, which bounced back to this page.
+   * The client's name, linked to its conversation over the page's period
+   * where the account may read that group's chats (metrics and chats are
+   * granted apart: a link without the right bounced back to this page).
+   * From a card's drawer the link also names the card and the moment of the
+   * row's event, so the chat lands on it and steps through the card's events
+   * (before 2026-09-28 it opened at the client's first message of the period).
    */
-  const clientCell = (client: string, groupNames: string | null, from: string): ReactNode => {
-    // A client can belong to several groups; the chat screen shows one at a
-    // time, so the link takes the first one whose chats are granted.
-    const candidates = group ? [group] : (groupNames ?? "").split(",").map((g) => g.trim());
-    const chatGroup = candidates.find((g) => g && (user?.unrestricted || user?.chatGroups.includes(g)));
+  const clientCell = (
+    client: string,
+    groupNames: string | null,
+    nav?: { metric: DrillKey; at?: string },
+  ): ReactNode => {
+    const chatGroup = chatGroupFor(user, groupNames, group);
     if (!chatGroup) {
       return client;
     }
-    const params = new URLSearchParams({
-      group: chatGroup,
-      user: client,
-      start: dayjs(from).format("YYYY-MM-DD"),
-      end: endStr,
-    });
+    const params = new URLSearchParams({ group: chatGroup, user: client, start: startStr, end: endStr });
+    if (nav) {
+      params.set("metric", nav.metric);
+      if (nav.at) params.set("at", nav.at);
+      // The drawer's scope: the chat's "next client" walks the same list.
+      if (group) params.set("drillGroup", group);
+    }
     return (
       <Link to={`/chat?${params}`} target="_blank">
         {client}
@@ -211,7 +217,7 @@ export default function MetricsPage() {
     {
       title: "Клиент",
       dataIndex: "client",
-      render: (client: string, r) => clientCell(client, r.groupNames, startStr),
+      render: (client: string, r) => clientCell(client, r.groupNames),
     },
     { title: "Группа", dataIndex: "groupNames", ellipsis: true },
     { title: "Заявок", dataIndex: "tickets", align: "right", sorter: (a, b) => a.tickets - b.tickets },

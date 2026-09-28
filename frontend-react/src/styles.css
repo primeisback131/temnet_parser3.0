@@ -646,6 +646,31 @@ body {
   background: rgba(255, 255, 255, 0.35);
 }
 
+/* Events of the metric card the chat was opened from (DrillNavigator). */
+.msg-row.event .bubble {
+  box-shadow: inset 3px 0 0 var(--warning), var(--shadow);
+}
+
+.chat-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.chat-nav-title {
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--nav-accent);
+  padding-left: 10px;
+}
+
+.chat-nav-gap {
+  flex: 1;
+}
+
 .msg-row.current .bubble {
   outline: 2px solid var(--brand);
   outline-offset: 2px;

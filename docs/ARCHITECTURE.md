@@ -251,7 +251,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `AuthController` | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password` (смена своего пароля) |
 | `UserAdminController` | `GET/POST/PUT/DELETE /admin/users…` (только администратор) |
 | `ChatController` | `GET /chat` (`user?` — переписка одного клиента), `GET /chat/chatlist` (список клиентов) (админ + руководитель) |
-| `MetricsController` | `GET /metrics/{timeseries,backlog,backlog/tickets,heatmap,sla,resolution,reopens,alerts,categories,categories/timeseries,summary,clients,operators}`, детализация плиток `GET /metrics/{tickets/opened,tickets/closed,clients/messages}` (админ + руководитель) |
+| `MetricsController` | `GET /metrics/{timeseries,backlog,backlog/tickets,heatmap,sla,resolution,reopens,alerts,categories,categories/timeseries,summary,clients,operators}`, детализация плиток `GET /metrics/{tickets/opened,tickets/closed,clients/messages,messages/off-hours}` (админ + руководитель) |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` (только администратор) |
 
 ### Авторизация и права
@@ -488,6 +488,15 @@ spring.cache.caffeine.spec=expireAfterWrite=${METRICS_CACHE_TTL:10m},maximumSize
   перебрасывает молча на главную. Имя клиента на странице метрик ведёт в чат
   только если у учётки есть чаты его группы (`chatGroups` из `/auth/me`):
   метрики и чаты выдаются раздельно.
+- [`MetricDrawer`](../frontend-react/src/components/MetricDrawer.tsx) — панель
+  детализации плитки метрик: цифры, разбивки с фильтром по клику, таблица по
+  организациям, список, Excel. Описания плиток — `pages/MetricDrill.tsx`.
+- [`DrillNavigator`](../frontend-react/src/components/DrillNavigator.tsx) —
+  полоса событий плитки в чате, открытом из панели: шаги по событиям и
+  клиентам. Что считается событием и где встаёт чат —
+  [`lib/drillEvents.ts`](../frontend-react/src/lib/drillEvents.ts), одно
+  определение для панели и чата; в чью группу вести ссылку на чат —
+  [`lib/chatAccess.ts`](../frontend-react/src/lib/chatAccess.ts).
 - [`ChangePasswordForm`](../frontend-react/src/components/ChangePasswordForm.tsx) —
   форма смены пароля; используется и в модальном окне из шапки, и на экране
   принудительной смены временного пароля.

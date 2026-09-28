@@ -28,9 +28,11 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useChatParticipants, useChatTickets, useChats, useGroups } from "../api/queries";
 import type { ChatMessage, ChatTicket } from "../api/types";
+import DrillNavigator, { useDrillNav } from "../components/DrillNavigator";
 import QueryError from "../components/QueryError";
 import { chartColors } from "../lib/chartTheme";
 import { defaultRange, toApiDate } from "../lib/date";
+import { asDrillKey, BURST_GAP_MINUTES } from "../lib/drillEvents";
 import { exportToExcel } from "../lib/excel";
 import { humanizeSeconds } from "../lib/format";
 import { useThemeMode } from "../theme";
@@ -187,6 +189,25 @@ export default function ChatPage() {
   // Arriving by deep link, the interesting part is where the period starts
   // (the ticket that was clicked); otherwise the newest messages matter.
   const deepLinked = useRef(Boolean(params.get("user")));
+  // Opened from a metric card's drawer: the card, its scope, and the moment of
+  // the event the chat stands on (the event bar steps through the rest).
+  const [metric, setMetric] = useState(() => asDrillKey(params.get("metric")));
+  const [drillGroup, setDrillGroup] = useState<string | null>(params.get("drillGroup"));
+  const [eventAt, setEventAt] = useState<string | null>(params.get("at"));
+  // The card's period as the drawer had it: the events come from it, while
+  // the chat's own period widens to show an event outside it (a ticket closed
+  // or gone silent after the period, an open ticket older than it).
+  const [drillPeriod] = useState(() => ({
+    start: params.get("drillStart") ?? params.get("start") ?? toApiDate(defaultRange()[0]),
+    end: params.get("drillEnd") ?? params.get("end") ?? toApiDate(defaultRange()[1]),
+  }));
+  // The user picked the period by hand: steps stay inside it, nothing widens.
+  const [ownPeriod, setOwnPeriod] = useState(false);
+  const [wantClients, setWantClients] = useState(false);
+  const pendingStep = useRef<-1 | 1 | null>(null);
+  // A client the bar moved to may be missing from the list until its group
+  // and period reload; the "not in the list" check waits for it.
+  const switching = useRef(Boolean(params.get("metric") && params.get("user")));
   const [userSearch, setUserSearch] = useState("");
   const [messageSearch, setMessageSearch] = useState("");
   const [matchIndex, setMatchIndex] = useState(0);
@@ -202,8 +223,15 @@ export default function ChatPage() {
     next.set("end", endStr);
     if (group) next.set("group", group);
     if (selectedUser) next.set("user", selectedUser);
+    if (metric) {
+      next.set("metric", metric);
+      next.set("drillStart", drillPeriod.start);
+      next.set("drillEnd", drillPeriod.end);
+      if (drillGroup) next.set("drillGroup", drillGroup);
+      if (eventAt) next.set("at", eventAt);
+    }
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [startStr, endStr, group, selectedUser, params, setParams]);
+  }, [startStr, endStr, group, selectedUser, metric, drillGroup, drillPeriod, eventAt, params, setParams]);
 
   const { data: groups = [], error: groupsError } = useGroups("chats");
   const {
@@ -224,9 +252,13 @@ export default function ChatPage() {
   // A period or group change can make the selected client disappear from the
   // list; keep the selection only while it is still there.
   useEffect(() => {
-    if (selectedUser && !usersLoading && !usersError && !participants.some((p) => p.client === selectedUser)) {
-      setSelectedUser(null);
+    if (!selectedUser || usersLoading || usersError) return;
+    const present = participants.some((p) => p.client === selectedUser);
+    if (switching.current) {
+      if (present) switching.current = false;
+      return;
     }
+    if (!present) setSelectedUser(null);
   }, [participants, usersLoading, usersError, selectedUser]);
 
   const filteredUsers = useMemo(() => {
@@ -246,6 +278,52 @@ export default function ChatPage() {
     [chats, tickets, colors, spansYears],
   );
 
+  const nav = useDrillNav({
+    metric,
+    start: drillPeriod.start,
+    end: drillPeriod.end,
+    drillGroup,
+    client: selectedUser,
+    chats,
+    wantClients,
+  });
+  // With a period picked by hand the steps stay inside it.
+  const events = useMemo(
+    () => (ownPeriod ? nav.events.filter((at) => at.slice(0, 10) >= startStr && at.slice(0, 10) <= endStr) : nav.events),
+    [nav.events, ownPeriod, startStr, endStr],
+  );
+  // An event is a message time. The feed may lack it (a chat granted for one
+  // desk): a message within BURST_GAP_MINUTES after it stands in, no further.
+  const messageAt = (at: string) => {
+    const i = chats.findIndex((m) => m.createdAt >= at);
+    return i >= 0 && dayjs(chats[i].createdAt).diff(at, "minute") <= BURST_GAP_MINUTES ? i : -1;
+  };
+  const eventIndexes = useMemo(
+    () => new Set(events.map(messageAt).filter((i) => i >= 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [events, chats],
+  );
+  const eventIndex = eventAt ? events.indexOf(eventAt) : -1;
+  const targetIndex = metric && eventAt && !chatLoading ? messageAt(eventAt) : -1;
+  const hidden = metric != null && eventAt != null && !chatLoading && !nav.loading && targetIndex < 0;
+  // Neighbours by time, so a row that is not an event steps forward and back too.
+  const prevEvent = eventAt == null ? -1 : events.reduce((last, at, i) => (at < eventAt ? i : last), -1);
+  const nextEvent = eventAt == null ? (events.length ? 0 : -1) : events.findIndex((at) => at > eventAt);
+  // No moment in the link (a client row, the next client, a new period): the first event.
+  useEffect(() => {
+    if (metric && eventAt == null && events.length > 0) setEventAt(events[0]);
+  }, [metric, eventAt, events]);
+  // Show the event even outside the period: widen once per event, never after
+  // the user picked the period by hand.
+  useEffect(() => {
+    if (!metric || !eventAt || ownPeriod) return;
+    const day = dayjs(eventAt.slice(0, 10));
+    if (day.isBefore(start, "day") || day.isAfter(end, "day")) {
+      setRange([day.isBefore(start, "day") ? day : start, day.isAfter(end, "day") ? day : end]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventAt]);
+
   // Matches of the in-conversation search, as message indexes; the feed keeps
   // every message and highlights these.
   const needle = messageSearch.trim().toLowerCase();
@@ -262,12 +340,16 @@ export default function ChatPage() {
   useEffect(() => {
     if (matches.length > 0) scrollToMessage(matches[matchIndex] ?? matches[0]);
   }, [matches, matchIndex]);
+  useEffect(() => {
+    if (!needle && targetIndex >= 0) scrollToMessage(targetIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetIndex, needle]);
 
   // Where to land after the conversation loads: the top for a deep link (the
   // ticket that was clicked is there), the newest message otherwise.
   useEffect(() => {
     if (chatLoading || chats.length === 0) return;
-    if (needle) return;
+    if (needle || targetIndex >= 0) return;
     const feed = feedRef.current;
     if (!feed) return;
     feed.scrollTop = deepLinked.current ? 0 : feed.scrollHeight;
@@ -278,6 +360,44 @@ export default function ChatPage() {
   const pickUser = (client: string) => {
     deepLinked.current = false;
     setSelectedUser(client);
+    setEventAt(null);
+  };
+
+  const clientIndex = nav.clients?.findIndex((c) => c.client === selectedUser) ?? -1;
+  const goEvent = (i: number) => {
+    // An explicit step wins over the in-dialog search.
+    setMessageSearch("");
+    setEventAt(events[i] ?? null);
+  };
+  const goClient = (step: -1 | 1) => {
+    if (nav.clients == null) {
+      // The whole list loads on the first step; the step runs when it arrives.
+      pendingStep.current = step;
+      setWantClients(true);
+      return;
+    }
+    const next = nav.clients[clientIndex < 0 ? (step > 0 ? 0 : -1) : clientIndex + step];
+    if (!next) return;
+    switching.current = true;
+    setMessageSearch("");
+    setOwnPeriod(false);
+    setRange([dayjs(drillPeriod.start), dayjs(drillPeriod.end)]);
+    if (next.group !== group) setGroup(next.group);
+    setSelectedUser(next.client);
+    setEventAt(null);
+  };
+  useEffect(() => {
+    if (nav.clients != null && pendingStep.current != null) {
+      const step = pendingStep.current;
+      pendingStep.current = null;
+      goClient(step);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nav.clients]);
+  const closeNav = () => {
+    setMetric(null);
+    setDrillGroup(null);
+    setEventAt(null);
   };
 
   const exportAll = async () => {
@@ -305,7 +425,15 @@ export default function ChatPage() {
         <Space wrap>
           <RangePicker
             value={[start, end]}
-            onChange={(v) => v && v[0] && v[1] && setRange([v[0], v[1]])}
+            onChange={(v) => {
+              if (!v || !v[0] || !v[1]) return;
+              setRange([v[0], v[1]]);
+              if (metric) {
+                // A period of one's own: the bar steps inside it from its first event.
+                setOwnPeriod(true);
+                setEventAt(null);
+              }
+            }}
             allowClear={false}
           />
           <Select
@@ -433,8 +561,27 @@ export default function ChatPage() {
                   </Tooltip>
                 </Space>
               </div>
+              {metric && (
+                <DrillNavigator
+                  metric={metric}
+                  accent={colors.amber}
+                  index={eventIndex}
+                  total={events.length}
+                  prev={prevEvent}
+                  next={nextEvent}
+                  loading={nav.loading || chatLoading}
+                  failed={nav.error != null}
+                  hidden={hidden}
+                  clientIndex={clientIndex}
+                  clientCount={nav.clients?.length ?? null}
+                  onEvent={goEvent}
+                  onClient={goClient}
+                  onClose={closeNav}
+                />
+              )}
               <div className="chat-messages" ref={feedRef}>
                 {chatError && <QueryError error={chatError} />}
+                {nav.error != null && <QueryError error={nav.error} />}
                 {chatLoading ? (
                   <div className="chat-center">
                     <Spin />
@@ -459,12 +606,12 @@ export default function ChatPage() {
                         );
                       }
                       const { m, index } = item;
-                      const isCurrent = index === currentMatch;
+                      const isCurrent = needle ? index === currentMatch : index === targetIndex;
                       return (
                         <div
                           key={item.key}
                           data-index={index}
-                          className={`msg-row ${m.direction === "out" ? "sent" : "received"}${item.cont ? " cont" : ""}${isCurrent ? " current" : ""}`}
+                          className={`msg-row ${m.direction === "out" ? "sent" : "received"}${item.cont ? " cont" : ""}${isCurrent ? " current" : ""}${eventIndexes.has(index) ? " event" : ""}`}
                         >
                           <div className="bubble">{highlight(m.message, needle ? messageSearch.trim() : "")}</div>
                           {item.showTime && (

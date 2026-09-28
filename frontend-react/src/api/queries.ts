@@ -179,17 +179,28 @@ export function useClients(start: string, end: string, groupName: string | null)
  */
 const DRILL_STALE_MS = 5 * 60 * 1000;
 
-/** The tickets behind the ticket cards; fetched only once a card is opened. */
+/** The tickets behind the ticket cards (one client's when given); fetched only once needed. */
 export function useTicketDetails(
   start: string,
   end: string,
   cohort: "opened" | "closed",
   groupName: string | null,
   enabled: boolean,
+  client: string | null = null,
 ) {
   return useQuery({
-    queryKey: ["ticketDetails", start, end, cohort, groupName],
-    queryFn: () => api.getTicketDetails(start, end, cohort, groupName ?? undefined),
+    queryKey: ["ticketDetails", start, end, cohort, groupName, client],
+    queryFn: () => api.getTicketDetails(start, end, cohort, groupName ?? undefined, client ?? undefined),
+    enabled,
+    staleTime: DRILL_STALE_MS,
+  });
+}
+
+/** Off-hours incoming messages, one each, for stepping through them in the chat. */
+export function useOffHoursMessages(start: string, end: string, groupName: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["offHoursMessages", start, end, groupName],
+    queryFn: () => api.getOffHoursMessages(start, end, groupName ?? undefined),
     enabled,
     staleTime: DRILL_STALE_MS,
   });
