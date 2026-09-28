@@ -83,7 +83,9 @@
 LLM-работу. Фикс: коммит на `main`, push, merge `main` в feature-ветку,
 push. Офисный сервер (192.168.228.21, снаружи как 10.77.77.116:55173)
 забирает `git pull` и перезапускает `run_frontend_prod.bat`; backend
-перезапускается только при Java-изменениях.
+перезапускается только при Java-изменениях. Если там стоят службы
+(`install_services.bat`), перезапуск - `nssm restart temnet-frontend`, а
+при Java-изменениях повторный `install_services.bat`.
 
 ## Приёмка
 
