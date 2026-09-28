@@ -328,6 +328,113 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── Metric drill-down (MetricDrawer) ──────────────── */
+.drill-breakdowns {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: 12px;
+  margin: 20px 0 16px;
+}
+
+.drill-breakdown {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.drill-breakdown-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.drill-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 232px;
+  overflow-y: auto;
+}
+
+.drill-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(24px, 56px) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.drill-bar:hover {
+  background: var(--surface-hover);
+}
+
+.drill-bar.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--drill-accent);
+}
+
+.drill-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drill-bar-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+
+.drill-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--drill-accent);
+}
+
+.drill-bar-value {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.drill-meter {
+  display: grid;
+  grid-template-columns: minmax(40px, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+}
+
+.drill-meter .drill-bar-value {
+  text-align: right;
+}
+
+.drill-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.facts + .drill-toolbar {
+  margin-top: 20px;
+}
+
 /* ─── Alerts feed ───────────────────────────────────── */
 .anomaly {
   display: flex;

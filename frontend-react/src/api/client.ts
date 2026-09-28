@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   ChatParticipant,
   ChatTicket,
+  ClientMessages,
   ClientStat,
   Company,
   Group,
@@ -30,6 +31,7 @@ import type {
   SlaPoint,
   SyncRun,
   SyncStatus,
+  TicketDetails,
   UserStat,
 } from "./types";
 
@@ -295,6 +297,21 @@ export const api = {
 
   getSummary: (start: string, end: string, groupName?: string) =>
     getJson<PeriodSummary>("/metrics/summary", {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  /** Tickets opened in the period ("opened") or closed / rejected in it ("closed"). */
+  getTicketDetails: (start: string, end: string, cohort: "opened" | "closed", groupName?: string) =>
+    getJson<TicketDetails>(`/metrics/tickets/${cohort}`, {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+    }),
+
+  getClientMessages: (start: string, end: string, groupName?: string) =>
+    getJson<ClientMessages[]>("/metrics/clients/messages", {
       start,
       end,
       ...(groupName ? { groupName } : {}),

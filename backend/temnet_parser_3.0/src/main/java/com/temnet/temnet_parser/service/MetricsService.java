@@ -6,6 +6,7 @@ import com.temnet.temnet_parser.dto.BacklogReport;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.CategoryCount;
 import com.temnet.temnet_parser.dto.CategoryPoint;
+import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
@@ -15,6 +16,7 @@ import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.ReopenPoint;
 import com.temnet.temnet_parser.dto.ResolutionPoint;
 import com.temnet.temnet_parser.dto.SlaPoint;
+import com.temnet.temnet_parser.dto.TicketDetails;
 import com.temnet.temnet_parser.repository.MetricsRepository;
 import com.temnet.temnet_parser.security.Scope;
 import org.springframework.cache.annotation.Cacheable;
@@ -131,6 +133,27 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.summary(start, end, scope);
+    }
+
+    /**
+     * Tickets behind the ticket cards: opened in the period, or (byClosing)
+     * closed or rejected in it. Not cached here: an entry is up to 45k rows
+     * (tens of MB of heap) and the cache is bounded by entry count, so a run
+     * of date ranges would fill the heap. The browser keeps its own copy.
+     */
+    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.ticketDetails(start, end, scope, byClosing);
+    }
+
+    /** Messages of the period per client, behind the message cards; not cached, as above. */
+    public List<ClientMessages> clientMessages(LocalDate start, LocalDate end, Scope scope) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.clientMessages(start, end, scope);
     }
 
     /** Clients with the most tickets in the period. */

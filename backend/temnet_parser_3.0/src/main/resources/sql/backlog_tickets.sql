@@ -12,6 +12,7 @@ SELECT
      WHERE cg.client = t.client
        AND cg.grp NOT LIKE 'help%' AND cg.grp <> 'all')        AS group_names,
     t.opened_at                                                AS opened_at,
+    DATEDIFF(${effectiveEnd}, t.opened_at)                     AS age_days,
     t.last_activity                                            AS last_activity,
     t.category                                                 AS category,
     t.messages_in                                              AS messages_in,

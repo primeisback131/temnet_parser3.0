@@ -11,6 +11,7 @@ public record OpenTicket(
         String client,
         String groupNames,
         LocalDateTime openedAt,
+        Integer ageDays,
         LocalDateTime lastActivity,
         String category,
         Integer messagesIn,

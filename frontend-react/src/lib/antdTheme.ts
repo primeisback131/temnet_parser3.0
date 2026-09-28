@@ -86,6 +86,8 @@ export function buildTheme(mode: ThemeMode): ThemeConfig {
         trackPadding: 3,
       },
       Modal: { contentBg: t.surface, headerBg: t.surface, titleFontSize: 16 },
+      // Same surface as the Modal: the drill-down's panels (surface-muted) must stand out from it.
+      Drawer: { colorBgElevated: t.surface },
       Descriptions: { labelBg: "transparent" },
       Tag: { defaultBg: t["surface-muted"], defaultColor: t["text-muted"] },
       Button: { primaryShadow: "none", defaultShadow: "none", dangerShadow: "none" },

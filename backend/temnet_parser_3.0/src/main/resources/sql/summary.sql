@@ -8,7 +8,9 @@
 -- threshold before the data horizon is abandoned - counted as expired, not
 -- open (expiry is lazy, see backlog.sql). `unanswered` are ended tickets that
 -- never got an operator message; tickets still open may yet be answered.
--- `handoffs` are tickets where more than one desk account wrote.
+-- `handoffs` are tickets where more than one desk account wrote. `thanked`
+-- counts closures only: the card divides it by `closed`, and a thanks after
+-- a rejection used to slip into the numerator.
 WITH base AS (
     SELECT
         t.client,
@@ -53,7 +55,7 @@ FROM (
                  AND resolution_seconds <= :dayResolutionSeconds), 0)  AS resolved_day,
     COALESCE(SUM(in_progress_at IS NOT NULL), 0)                       AS in_progress,
     AVG(pickup_seconds)                                                AS avg_pickup_seconds,
-    COALESCE(SUM(thanked), 0)                                          AS thanked,
+    COALESCE(SUM(thanked AND status = 'closed'), 0)                   AS thanked,
     COALESCE(SUM(replies), 0)                                          AS replies,
     COALESCE(SUM(reply_seconds), 0)                                    AS reply_seconds,
     AVG(msgs)                                                          AS avg_messages,

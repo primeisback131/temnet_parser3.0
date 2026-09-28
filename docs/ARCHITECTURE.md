@@ -299,7 +299,7 @@ HTTP → Controller → Service → Repository → (JdbcClient) → temnet_analy
 | `AuthController` | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password` (смена своего пароля) |
 | `UserAdminController` | `GET/POST/PUT/DELETE /admin/users…` (только администратор) |
 | `ChatController` | `GET /chat` (`user?` — переписка одного клиента), `GET /chat/chatlist` (список клиентов) (админ + руководитель) |
-| `MetricsController` | `GET /metrics/{timeseries,backlog,heatmap,sla,resolution,reopens,alerts,categories,operators}` (админ + руководитель) |
+| `MetricsController` | `GET /metrics/{timeseries,backlog,backlog/tickets,heatmap,sla,resolution,reopens,alerts,categories,categories/timeseries,summary,clients,operators}`, детализация плиток `GET /metrics/{tickets/opened,tickets/closed,clients/messages}` (админ + руководитель) |
 | `SyncController` (пакет `analytics/`) | `POST /admin/sync`, `POST /admin/sync/rebuild`, `GET /admin/sync/status` (только администратор) |
 | `LlmAdminController` (пакет `analytics/`) | `GET /admin/llm` (состояние, счётчики, телеметрия, настройки), `PUT`/`DELETE /admin/llm/settings`, `POST /admin/llm/run` (только администратор) |
 
