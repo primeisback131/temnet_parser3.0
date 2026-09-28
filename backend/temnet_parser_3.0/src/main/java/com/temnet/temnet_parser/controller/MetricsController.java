@@ -9,6 +9,7 @@ import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OffHoursMessage;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.PeriodSummary;
@@ -144,8 +145,9 @@ public class MetricsController {
     public TicketDetails ticketsOpened(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam(required = false) String groupName) {
-        return metricsService.ticketDetails(start, end, scope(groupName), false);
+            @RequestParam(required = false) String groupName,
+            @RequestParam(required = false) String client) {
+        return metricsService.ticketDetails(start, end, scope(groupName), false, client);
     }
 
     /** Tickets closed or rejected in the period, behind the closed and rejected cards. */
@@ -153,8 +155,9 @@ public class MetricsController {
     public TicketDetails ticketsClosed(
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
-            @RequestParam(required = false) String groupName) {
-        return metricsService.ticketDetails(start, end, scope(groupName), true);
+            @RequestParam(required = false) String groupName,
+            @RequestParam(required = false) String client) {
+        return metricsService.ticketDetails(start, end, scope(groupName), true, client);
     }
 
     /** Messages of the period per client, behind the message cards. */
@@ -164,6 +167,15 @@ public class MetricsController {
             @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
             @RequestParam(required = false) String groupName) {
         return metricsService.clientMessages(start, end, scope(groupName));
+    }
+
+    /** Incoming messages outside the working day, one row each. */
+    @GetMapping("/messages/off-hours")
+    public List<OffHoursMessage> offHoursMessages(
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate start,
+            @RequestParam @DateTimeFormat(iso = ISO.DATE) LocalDate end,
+            @RequestParam(required = false) String groupName) {
+        return metricsService.offHoursMessages(start, end, scope(groupName));
     }
 
     /** Clients with the most tickets in the period. */

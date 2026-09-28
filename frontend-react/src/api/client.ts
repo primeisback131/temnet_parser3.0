@@ -23,6 +23,7 @@ import type {
   LlmSettings,
   LlmStatus,
   MetricPoint,
+  OffHoursMessage,
   OpenTicket,
   OperatorStat,
   PeriodSummary,
@@ -322,8 +323,16 @@ export const api = {
     }),
 
   /** Tickets opened in the period ("opened") or closed / rejected in it ("closed"). */
-  getTicketDetails: (start: string, end: string, cohort: "opened" | "closed", groupName?: string) =>
+  getTicketDetails: (start: string, end: string, cohort: "opened" | "closed", groupName?: string, client?: string) =>
     getJson<TicketDetails>(`/metrics/tickets/${cohort}`, {
+      start,
+      end,
+      ...(groupName ? { groupName } : {}),
+      ...(client ? { client } : {}),
+    }),
+
+  getOffHoursMessages: (start: string, end: string, groupName?: string) =>
+    getJson<OffHoursMessage[]>("/metrics/messages/off-hours", {
       start,
       end,
       ...(groupName ? { groupName } : {}),

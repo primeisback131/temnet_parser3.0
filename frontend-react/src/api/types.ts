@@ -245,6 +245,13 @@ export interface TicketDetails {
   truncated: boolean;
 }
 
+/** One incoming message outside the working day, behind the off-hours card. */
+export interface OffHoursMessage {
+  client: string;
+  groupNames: string | null;
+  at: string;
+}
+
 /** A client's messages in the period; off-hours incoming split into weekday nights and weekends. */
 export interface ClientMessages {
   client: string;

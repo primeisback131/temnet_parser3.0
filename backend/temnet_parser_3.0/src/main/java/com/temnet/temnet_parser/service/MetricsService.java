@@ -10,6 +10,7 @@ import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OffHoursMessage;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.PeriodSummary;
@@ -141,11 +142,11 @@ public class MetricsService {
      * (tens of MB of heap) and the cache is bounded by entry count, so a run
      * of date ranges would fill the heap. The browser keeps its own copy.
      */
-    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing) {
+    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing, String client) {
         if (end.isBefore(start)) {
             throw new IllegalArgumentException("end must not be before start");
         }
-        return metricsRepository.ticketDetails(start, end, scope, byClosing);
+        return metricsRepository.ticketDetails(start, end, scope, byClosing, client);
     }
 
     /** Messages of the period per client, behind the message cards; not cached, as above. */
@@ -154,6 +155,14 @@ public class MetricsService {
             throw new IllegalArgumentException("end must not be before start");
         }
         return metricsRepository.clientMessages(start, end, scope);
+    }
+
+    /** Incoming messages outside the working day, for stepping through them in the chat; not cached, as above. */
+    public List<OffHoursMessage> offHoursMessages(LocalDate start, LocalDate end, Scope scope) {
+        if (end.isBefore(start)) {
+            throw new IllegalArgumentException("end must not be before start");
+        }
+        return metricsRepository.offHoursMessages(start, end, scope);
     }
 
     /** Clients with the most tickets in the period. */

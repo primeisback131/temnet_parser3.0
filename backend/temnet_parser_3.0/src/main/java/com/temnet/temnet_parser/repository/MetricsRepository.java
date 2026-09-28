@@ -10,6 +10,7 @@ import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.ClientStat;
 import com.temnet.temnet_parser.dto.HeatmapCell;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OffHoursMessage;
 import com.temnet.temnet_parser.dto.OpenTicket;
 import com.temnet.temnet_parser.dto.OperatorStat;
 import com.temnet.temnet_parser.dto.PeriodSummary;
@@ -56,6 +57,7 @@ public class MetricsRepository {
     private static final String CATEGORY_TIMESERIES_SQL = SqlLoader.load("sql/category_timeseries.sql");
     private static final String TICKET_DETAILS_SQL = SqlLoader.load("sql/ticket_details.sql");
     private static final String CLIENT_MESSAGES_SQL = SqlLoader.load("sql/client_messages.sql");
+    private static final String OFF_HOURS_MESSAGES_SQL = SqlLoader.load("sql/off_hours_messages.sql");
 
     // The two ticket cohorts of the drill-down: opened in the period (the
     // summary's population) and closed or rejected in it (the timeseries'
@@ -208,18 +210,25 @@ public class MetricsRepository {
 
     /**
      * Tickets behind the ticket cards, one row each with the summary's flags:
-     * opened in the period, or (byClosing) closed or rejected in it.
+     * opened in the period, or (byClosing) closed or rejected in it; only one
+     * client's when {@code client} is given (the chat's event bar).
      */
-    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing) {
+    public TicketDetails ticketDetails(LocalDate start, LocalDate end, Scope scope, boolean byClosing, String client) {
+        boolean oneClient = client != null && !client.isBlank();
 
         String sql = TICKET_DETAILS_SQL
                 .replace("${period}", byClosing ? CLOSED_IN_PERIOD : OPENED_IN_PERIOD)
                 .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
                 .replace("${groupFilter}", ScopeSql.tickets("t", scope))
-                .replace("${reopenScope}", ScopeSql.tickets("r", scope));
+                .replace("${reopenScope}", ScopeSql.tickets("r", scope))
+                .replace("${clientFilter}", oneClient ? "AND t.client = :client" : "");
 
+        JdbcClient.StatementSpec spec = withRange(sql, start, end, scope);
+        if (oneClient) {
+            spec = spec.param("client", client);
+        }
         // One row over the cap tells a cut list from one that just fits.
-        List<TicketDetail> rows = withRange(sql, start, end, scope)
+        List<TicketDetail> rows = spec
                 .param("maxFrtSeconds", MAX_FRT_SECONDS)
                 .param("fastReplySeconds", FAST_REPLY_SECONDS)
                 .param("hourReplySeconds", HOUR_REPLY_SECONDS)
@@ -244,6 +253,17 @@ public class MetricsRepository {
 
         return withRange(sql, start, end, scope)
                 .query(new DataClassRowMapper<>(ClientMessages.class)).list();
+    }
+
+    /** Incoming messages outside the working day, one row each, behind the off-hours card. */
+    public List<OffHoursMessage> offHoursMessages(LocalDate start, LocalDate end, Scope scope) {
+
+        String sql = OFF_HOURS_MESSAGES_SQL
+                .replace("${effectiveEnd}", DataHorizon.CAPPED_END)
+                .replace("${membership}", ScopeSql.messages("m", scope));
+
+        return withRange(sql, start, end, scope)
+                .query(new DataClassRowMapper<>(OffHoursMessage.class)).list();
     }
 
     /** Clients with the most tickets opened in the period. */

@@ -8,7 +8,8 @@
 --
 -- `status` is the effective one: a ticket still 'open' whose silence crossed
 -- the expiry threshold before the data horizon is abandoned and reads
--- 'expired' (expiry is lazy, see backlog.sql). `reopened` - a later ticket
+-- 'expired' (expiry is lazy, see backlog.sql). ${clientFilter} narrows the
+-- list to one client for the chat's event bar (the rows stay the same). `reopened` - a later ticket
 -- of the client was a probable repeat of this one (same rule as reopens.sql);
 -- the repeat must be in the caller's scope too (${reopenScope}): a desk sees
 -- whether the client came back to it, not to another desk.
@@ -54,6 +55,7 @@ FROM (
     FROM ticket t
     WHERE ${period}
       ${groupFilter}
+      ${clientFilter}
 ) AS b
 ORDER BY b.opened_at DESC
 LIMIT :limit

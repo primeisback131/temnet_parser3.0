@@ -3,6 +3,7 @@ package com.temnet.temnet_parser.repository;
 import com.temnet.temnet_parser.dto.Bucket;
 import com.temnet.temnet_parser.dto.ClientMessages;
 import com.temnet.temnet_parser.dto.MetricPoint;
+import com.temnet.temnet_parser.dto.OffHoursMessage;
 import com.temnet.temnet_parser.dto.PeriodSummary;
 import com.temnet.temnet_parser.dto.TicketDetail;
 import com.temnet.temnet_parser.security.Scope;
@@ -15,6 +16,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
@@ -43,7 +46,7 @@ class MetricsDrillDownTest {
     void openedTicketsAddUpToTheSummary() {
         PeriodSummary s = metrics.summary(START, END, Scope.all());
         assumeTrue(s.opened() > 0, "no tickets in the analytics DB");
-        List<TicketDetail> rows = metrics.ticketDetails(START, END, Scope.all(), false).tickets();
+        List<TicketDetail> rows = metrics.ticketDetails(START, END, Scope.all(), false, null).tickets();
 
         assertThat((long) rows.size()).isEqualTo(s.opened());
         assertThat(count(rows, r -> r.status().equals("closed"))).isEqualTo(s.closed());
@@ -64,7 +67,7 @@ class MetricsDrillDownTest {
     void closedTicketsAddUpToTheTimeseries() {
         List<MetricPoint> points = metrics.timeseries(START, END, Scope.all(), Bucket.MONTH);
         assumeTrue(sum(points, MetricPoint::closed) > 0, "no closures in the analytics DB");
-        List<TicketDetail> rows = metrics.ticketDetails(START, END, Scope.all(), true).tickets();
+        List<TicketDetail> rows = metrics.ticketDetails(START, END, Scope.all(), true, null).tickets();
 
         assertThat(count(rows, r -> r.status().equals("closed"))).isEqualTo(sum(points, MetricPoint::closed));
         assertThat(count(rows, r -> r.status().equals("rejected"))).isEqualTo(sum(points, MetricPoint::rejected));
@@ -83,12 +86,41 @@ class MetricsDrillDownTest {
         assertThat(sum(rows, r -> r.offHoursNight() + r.offHoursWeekend())).isEqualTo(s.offHours());
     }
 
+    /** The chat steps through the same messages the off-hours card counts, client by client. */
+    @Test
+    void offHoursMessagesAreTheOnesTheCardCounts() {
+        // Runs the query on CI's empty schema too, and with a group bound.
+        List<OffHoursMessage> rows = metrics.offHoursMessages(START, END, Scope.all());
+        metrics.offHoursMessages(START, END, Scope.all().within("no such group"));
+        List<ClientMessages> perClient = metrics.clientMessages(START, END, Scope.all());
+        assumeTrue(sum(perClient, r -> r.offHoursNight() + r.offHoursWeekend()) > 0, "no off-hours messages");
+
+        Map<String, Long> counted = perClient.stream()
+                .filter(r -> r.offHoursNight() + r.offHoursWeekend() > 0)
+                .collect(Collectors.toMap(ClientMessages::client, r -> r.offHoursNight() + r.offHoursWeekend()));
+        Map<String, Long> listed = rows.stream()
+                .collect(Collectors.groupingBy(OffHoursMessage::client, Collectors.counting()));
+        assertThat(listed).isEqualTo(counted);
+    }
+
     private static long count(List<TicketDetail> rows, Predicate<TicketDetail> test) {
         return rows.stream().filter(test).count();
     }
 
     private static <T> long sum(List<T> rows, ToLongFunction<T> value) {
         return rows.stream().mapToLong(value).sum();
+    }
+
+    /** The chat's event bar asks for one client: the same rows as the full list has for it. */
+    @Test
+    void oneClientsTicketsAreItsRowsOfTheFullList() {
+        List<TicketDetail> all = metrics.ticketDetails(START, END, Scope.all(), false, null).tickets();
+        assumeTrue(!all.isEmpty(), "no tickets in the analytics DB");
+        String client = all.get(all.size() / 2).client();
+
+        List<TicketDetail> one = metrics.ticketDetails(START, END, Scope.all(), false, client).tickets();
+
+        assertThat(one).isNotEmpty().isEqualTo(all.stream().filter(t -> t.client().equals(client)).toList());
     }
 
     /**
@@ -131,7 +163,7 @@ class MetricsDrillDownTest {
         LocalDate day = p.openedAt().toLocalDate();
 
         List<TicketDetail> rows =
-                metrics.ticketDetails(day, day, Scope.of(List.of(p.account()), List.of()), false).tickets();
+                metrics.ticketDetails(day, day, Scope.of(List.of(p.account()), List.of()), false, null).tickets();
 
         assertThat(rows).filteredOn(r -> r.client().equals(p.client()) && r.openedAt().equals(p.openedAt()))
                 .singleElement()

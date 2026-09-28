@@ -9,21 +9,10 @@ import type { BacklogReport, ClientMessages, OpenTicket, TicketDetail } from "..
 import type { Breakdown, DrillSpec } from "../components/MetricDrawer";
 import MetricDrawer from "../components/MetricDrawer";
 import { chartColors } from "../lib/chartTheme";
+import type { DrillKey } from "../lib/drillEvents";
+import { TICKET_EVENTS } from "../lib/drillEvents";
 import { humanizeSeconds } from "../lib/format";
 import { useThemeMode } from "../theme";
-
-/** The clickable cards of the metrics screen. */
-export type DrillKey =
-  | "messages"
-  | "closed"
-  | "rejected"
-  | "open"
-  | "unanswered"
-  | "expired"
-  | "fast"
-  | "resolved"
-  | "thanked"
-  | "offHours";
 
 /** Cards counted over the tickets opened in the period (the summary's population). */
 const OPENED_COHORT: DrillKey[] = ["unanswered", "expired", "fast", "resolved", "thanked"];
@@ -39,7 +28,7 @@ interface Props {
   group: string | null;
   backlog: BacklogReport | undefined;
   /** The client's name, a chat link where the account may read that chat. */
-  clientCell: (client: string, groupNames: string | null, from: string) => ReactNode;
+  clientCell: (client: string, groupNames: string | null, nav?: { metric: DrillKey; at?: string }) => ReactNode;
 }
 
 const num = (n: number) => n.toLocaleString("ru-RU");
@@ -182,7 +171,8 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
         title: "Клиент",
         dataIndex: "client",
         sorter: (a, b) => a.client.localeCompare(b.client),
-        render: (client: string, t) => clientCell(client, t.groupNames, t.openedAt),
+        render: (client: string, t) =>
+          clientCell(client, t.groupNames, { metric: drill, at: TICKET_EVENTS[drill]?.at(t) ?? t.openedAt }),
       },
       excel: (t) => ({ Клиент: t.client }),
     },
@@ -306,7 +296,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
     title: "Клиент",
     dataIndex: "client",
     sorter: (a, b) => a.client.localeCompare(b.client),
-    render: (client: string, r) => clientCell(client, r.groupNames, start),
+    render: (client: string, r) => clientCell(client, r.groupNames, { metric: drill }),
   };
   const clients = {
     rows: messages.data ?? [],
@@ -552,7 +542,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
                 title: "Клиент",
                 dataIndex: "client",
                 sorter: (a, b) => a.client.localeCompare(b.client),
-                render: (client: string, t) => clientCell(client, t.groupNames, t.openedAt),
+                render: (client: string, t) => clientCell(client, t.groupNames, { metric: "open", at: t.openedAt }),
               },
               {
                 title: "Открыта",
@@ -631,7 +621,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
               { title: "Когда пришла", of: (t) => arrival(t.openedAt), order: ARRIVAL_ORDER },
               byCategory(),
             ],
-            focus: { label: "Без ответа", test: (t) => t.noReply },
+            focus: { label: "Без ответа", test: TICKET_EVENTS.unanswered!.test },
           })}
         />
       );
@@ -680,7 +670,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
               { title: "Первым ответил", of: (t) => t.firstResponder },
               byCategory(),
             ],
-            focus: { label: "Истекли", test: (t) => t.status === "expired" },
+            focus: { label: "Истекли", test: TICKET_EVENTS.expired!.test },
           })}
         />
       );
@@ -726,7 +716,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
               { title: "Первым ответил", of: (t) => t.firstResponder },
               byCategory(),
             ],
-            focus: { label: "Дольше 15 мин", test: (t) => !t.answeredFast },
+            focus: { label: "Дольше 15 мин", test: TICKET_EVENTS.fast!.test },
           })}
         />
       );
@@ -772,7 +762,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
               { title: "Кто закрыл", of: (t) => t.closedBy },
               byCategory(),
             ],
-            focus: { label: "Дольше часа", test: (t) => !t.resolvedHour },
+            focus: { label: "Дольше часа", test: TICKET_EVENTS.resolved!.test },
           })}
         />
       );
@@ -798,7 +788,7 @@ export default function MetricDrill({ drill, onClose, start, end, group, backlog
               ];
             },
             breakdowns: [{ title: "Кто закрыл", of: (t) => t.closedBy }, byCategory()],
-            focus: { label: "Со «спасибо»", test: (t) => t.thanked },
+            focus: { label: "Со «спасибо»", test: TICKET_EVENTS.thanked!.test },
           })}
         />
       );
