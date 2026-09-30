@@ -1,9 +1,6 @@
 package com.temnet.temnet_parser.analytics;
 
-import com.temnet.temnet_parser.support.BusinessTime;
 import com.temnet.temnet_parser.support.CategoryRules;
-import com.temnet.temnet_parser.support.ClosurePhrase;
-import com.temnet.temnet_parser.support.ReopenSignals;
 import com.temnet.temnet_parser.support.SqlLoader;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -33,7 +30,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -58,11 +54,12 @@ import java.util.regex.Pattern;
  * extracted from the archived XML, and the author is the owner of the pair's
  * FIRST row — the server archives the sender's copy before the recipient's
  * (verified on the whole dump). Then a per-client state
- * machine maintains tickets: a client message opens a ticket (unless it is a
- * short "thanks" right after a closure), an operator closure phrase closes
- * it, long silence expires it, and a quick return after a closure is scored
- * as a probable reopen (marker words confirm it; a bare category match or no
- * signal at all goes to the LLM for the verdict).
+ * machine ({@link TicketEngine}) maintains tickets: a client message opens a
+ * ticket (unless it is thanks, or the conversation resuming right after a
+ * closure), an operator closure phrase closes it, long silence expires it,
+ * and a quick return after a closure or expiry is scored as a probable
+ * reopen (marker words confirm it; a bare category match or no signal at
+ * all goes to the LLM for the verdict).
  */
 @Service
 public class AnalyticsSyncService {
@@ -76,11 +73,6 @@ public class AnalyticsSyncService {
     // from splitting a pair; the window separates twins from reused stanza ids.
     private static final int TWIN_MARGIN = 32;
     private static final long TWIN_WINDOW_MICROS = 1_000_000;
-
-    // Windows in WORKING seconds (08:00-18:00 Mon-Fri, see BusinessTime).
-    private static final long ACK_WINDOW_SECONDS = 4 * 3600;     // "спасибо" after a closure
-    private static final long REOPEN_WINDOW_SECONDS = 10 * 3600; // one working day
-    private static final long STALE_OPEN_SECONDS = 20 * 3600;    // silence that expires an open ticket
 
     /** A binary string in an Erlang term: {@code <<"name">>}. */
     private static final Pattern ERLANG_BINARY = Pattern.compile("<<\"([^\"]*)\">>");
@@ -187,8 +179,8 @@ public class AnalyticsSyncService {
     });
 
     /** A normalized message of a client <-> support conversation. */
-    private record Msg(long sourceId, String client, String author, String recipient, boolean inbound, String txt,
-                       LocalDateTime createdAt, byte[] hash) {
+    record Msg(long sourceId, String client, String author, String recipient, boolean inbound, String txt,
+               LocalDateTime createdAt, byte[] hash) {
     }
 
     /** A raw archive row: authorship and support-ness not yet resolved. */
@@ -309,7 +301,7 @@ public class AnalyticsSyncService {
             watermark = 0;
         }
 
-        TicketEngine engine = new TicketEngine(tables);
+        TicketEngine engine = new TicketEngine(new JdbcTicketStore(tables));
         long scanned = 0;
         long inserted = 0;
 
@@ -706,149 +698,48 @@ public class AnalyticsSyncService {
     }
 
     /**
-     * Per-client ticket state machine. State survives across batches within a
-     * run; across runs it is reloaded from the ticket table itself (the open
-     * ticket and the most recently closed one are all the state there is).
+     * The ticket state machine's view of the analytics DB: the live tables
+     * for an incremental sync, the shadow copies during a rebuild.
      */
-    private class TicketEngine {
+    private class JdbcTicketStore implements TicketEngine.Store {
 
         private final Tables tables;
-        private final Map<String, ClientState> states = new HashMap<>();
-        private final Set<Ticket> dirty = new LinkedHashSet<>();
 
-        TicketEngine(Tables tables) {
+        JdbcTicketStore(Tables tables) {
             this.tables = tables;
         }
 
-        private class ClientState {
-            Ticket open;
-            Ticket lastClosed;
+        @Override
+        public Ticket open(String client) {
+            return latest(client, "status = 'open'");
         }
 
-        void apply(Msg m) {
-            ClientState st = states.computeIfAbsent(m.client(), this::load);
-            if (m.inbound()) {
-                applyInbound(st, m);
-            } else {
-                applyOutbound(st, m);
-            }
+        @Override
+        public Ticket lastEnded(String client) {
+            return latest(client, "status <> 'open'");
         }
 
-        private void applyInbound(ClientState st, Msg m) {
-            if (st.open != null
-                    && BusinessTime.secondsBetween(st.open.lastActivity, m.createdAt()) > STALE_OPEN_SECONDS) {
-                st.open.status = "expired";
-                dirty.add(st.open);
-                st.open = null;
-            }
-            if (st.open != null) {
-                st.open.messagesIn++;
-                st.open.lastActivity = m.createdAt();
-                if (st.open.awaitingSince == null) {
-                    st.open.awaitingSince = m.createdAt();
-                }
-                int rank = CategoryRules.rankOf(m.txt());
-                if (rank < st.open.categoryRank) {
-                    st.open.categoryRank = rank;
-                }
-                dirty.add(st.open);
-                return;
-            }
-
-            // "спасибо" after a closure is not a new ticket — but "не помогло"
-            // is, however short: ReopenSignals checks the markers first.
-            if (st.lastClosed != null
-                    && ReopenSignals.isAck(m.txt())
-                    && BusinessTime.secondsBetween(st.lastClosed.closedAt, m.createdAt()) <= ACK_WINDOW_SECONDS) {
-                st.lastClosed.thanked = true;
-                dirty.add(st.lastClosed);
-                return;
-            }
-
-            Ticket ticket = new Ticket(m.client(), m.createdAt());
-            // The desk this ticket belongs to: whoever the client addressed.
-            ticket.account = m.recipient();
-            ticket.categoryRank = CategoryRules.rankOf(m.txt());
-            ticket.messagesIn = 1;
-            if (st.lastClosed != null
-                    && BusinessTime.secondsBetween(st.lastClosed.closedAt, m.createdAt()) <= REOPEN_WINDOW_SECONDS) {
-                int score = 0;
-                if (ReopenSignals.isReopenMarker(m.txt())) {
-                    score += 2;
-                }
-                if (ticket.categoryRank == st.lastClosed.categoryRank
-                        && ticket.categoryRank != CategoryRules.otherRank()) {
-                    score += 1;
-                }
-                ticket.reopenedFrom = st.lastClosed.id;
-                ticket.reopenScore = score;
-                if (score < 2) {
-                    // No marker words: a bare category match is a weak signal,
-                    // so the LLM gets the final say (2026-09-10: score-1
-                    // tickets used to stay "probable" forever).
-                    ticket.reopenLlm = "pending";
-                }
-            }
-            insert(ticket);
-            st.open = ticket;
+        @Override
+        public Msg previous(Msg m) {
+            List<Msg> found = analytics.query(
+                    "SELECT source_id, author, recipient, direction, txt, created_at FROM " + tables.message()
+                            + " WHERE client = ? AND (created_at < ? OR (created_at = ? AND source_id < ?))"
+                            + " ORDER BY created_at DESC, source_id DESC LIMIT 1",
+                    (rs, i) -> new Msg(rs.getLong("source_id"), m.client(), rs.getString("author"),
+                            rs.getString("recipient"), "in".equals(rs.getString("direction")), rs.getString("txt"),
+                            rs.getTimestamp("created_at").toLocalDateTime(), null),
+                    m.client(), Timestamp.valueOf(m.createdAt()), Timestamp.valueOf(m.createdAt()), m.sourceId());
+            return found.isEmpty() ? null : found.get(0);
         }
 
-        private void applyOutbound(ClientState st, Msg m) {
-            if (st.open == null) {
-                return; // greeting or operator-only closure without an open ticket
-            }
-            String lower = m.txt().toLowerCase();
-            st.open.messagesOut++;
-            st.open.lastActivity = m.createdAt();
-            if (st.open.firstResponseAt == null) {
-                st.open.firstResponseAt = m.createdAt();
-                st.open.firstResponder = m.author();
-                st.open.frtSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
-            } else if (st.open.awaitingSince != null) {
-                // A reply to a waiting client: the wait counts once, from their
-                // oldest unanswered message, not once per message.
-                st.open.replies++;
-                st.open.replySeconds += BusinessTime.secondsBetween(st.open.awaitingSince, m.createdAt());
-            }
-            st.open.awaitingSince = null;
-            if (st.open.inProgressAt == null
-                    && (lower.contains("заявка в работе") || lower.contains("в работе заявка"))) {
-                st.open.inProgressAt = m.createdAt();
-                st.open.pickupSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
-            }
-            String closingStatus = ClosurePhrase.statusOf(m.txt());
-            if (closingStatus != null) {
-                close(st, m, closingStatus);
-            } else {
-                dirty.add(st.open);
-            }
-        }
-
-        private void close(ClientState st, Msg m, String status) {
-            st.open.status = status;
-            st.open.closedAt = m.createdAt();
-            st.open.closedBy = m.author();
-            st.open.resolutionSeconds = BusinessTime.secondsBetween(st.open.openedAt, m.createdAt());
-            dirty.add(st.open);
-            st.lastClosed = st.open;
-            st.open = null;
-        }
-
-        private ClientState load(String client) {
-            ClientState st = new ClientState();
-            st.open = latest(client, "status = 'open'", null);
-            st.lastClosed = latest(client, "status IN ('closed','rejected')", "closed_at");
-            return st;
-        }
-
-        private Ticket latest(String client, String statusFilter, String orderBy) {
+        private Ticket latest(String client, String statusFilter) {
             List<Ticket> found = analytics.query(
                     "SELECT id, client, account, opened_at, last_activity, first_response_at, first_responder, frt_seconds,"
                             + " in_progress_at, pickup_seconds, closed_at, closed_by, resolution_seconds, status,"
                             + " category_rank, messages_in, messages_out, reopened_from, reopen_score, reopen_llm,"
-                            + " thanked, awaiting_since, replies, reply_seconds"
+                            + " thanked, awaiting_since, replies, reply_seconds, resumes"
                             + " FROM " + tables.ticket() + " WHERE client = ? AND " + statusFilter
-                            + " ORDER BY " + (orderBy == null ? "opened_at" : orderBy) + " DESC LIMIT 1",
+                            + " ORDER BY opened_at DESC, id DESC LIMIT 1",
                     (rs, i) -> {
                         Ticket t = new Ticket(rs.getString("client"), rs.getTimestamp("opened_at").toLocalDateTime());
                         t.account = rs.getString("account");
@@ -877,13 +768,15 @@ public class AnalyticsSyncService {
                         t.awaitingSince = toLocal(rs.getTimestamp("awaiting_since"));
                         t.replies = rs.getInt("replies");
                         t.replySeconds = rs.getLong("reply_seconds");
+                        t.resumes = rs.getInt("resumes");
                         return t;
                     },
                     client);
             return found.isEmpty() ? null : found.get(0);
         }
 
-        private void insert(Ticket t) {
+        @Override
+        public void insert(Ticket t) {
             GeneratedKeyHolder keys = new GeneratedKeyHolder();
             analytics.update(con -> {
                 PreparedStatement ps = con.prepareStatement("""
@@ -892,8 +785,8 @@ public class AnalyticsSyncService {
                                                 closed_at, closed_by, resolution_seconds, status, category,
                                                 category_rank, messages_in, messages_out, reopened_from,
                                                 reopen_score, reopen_llm, pickup_seconds, thanked,
-                                                awaiting_since, replies, reply_seconds)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                awaiting_since, replies, reply_seconds, resumes)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """.formatted(tables.ticket()),
                         Statement.RETURN_GENERATED_KEYS);
                 fillTicket(ps, t);
@@ -902,20 +795,20 @@ public class AnalyticsSyncService {
             t.id = keys.getKey().longValue();
         }
 
-        void flushDirty() {
-            for (Ticket t : dirty) {
-                analytics.update("""
+        @Override
+        public void update(Ticket t) {
+            analytics.update("""
                                 UPDATE %s SET last_activity = ?, stale_at = ?, first_response_at = ?,
                                               first_responder = ?, frt_seconds = ?, in_progress_at = ?,
                                               closed_at = ?, closed_by = ?, resolution_seconds = ?, status = ?,
                                               category = ?, category_rank = ?, messages_in = ?, messages_out = ?,
                                               reopened_from = ?, reopen_score = ?, reopen_llm = ?,
                                               pickup_seconds = ?, thanked = ?, awaiting_since = ?,
-                                              replies = ?, reply_seconds = ?
+                                              replies = ?, reply_seconds = ?, resumes = ?
                                 WHERE id = ?
                                 """.formatted(tables.ticket()),
                         Timestamp.valueOf(t.lastActivity),
-                        Timestamp.valueOf(staleAt(t)),
+                        Timestamp.valueOf(TicketEngine.staleAt(t)),
                         toTimestamp(t.firstResponseAt),
                         t.firstResponder,
                         t.frtSeconds,
@@ -936,9 +829,8 @@ public class AnalyticsSyncService {
                         toTimestamp(t.awaitingSince),
                         t.replies,
                         t.replySeconds,
+                        t.resumes,
                         t.id);
-            }
-            dirty.clear();
         }
 
         private void fillTicket(PreparedStatement ps, Ticket t) throws java.sql.SQLException {
@@ -946,7 +838,7 @@ public class AnalyticsSyncService {
             ps.setString(2, t.account);
             ps.setTimestamp(3, Timestamp.valueOf(t.openedAt));
             ps.setTimestamp(4, Timestamp.valueOf(t.lastActivity));
-            ps.setTimestamp(5, Timestamp.valueOf(staleAt(t)));
+            ps.setTimestamp(5, Timestamp.valueOf(TicketEngine.staleAt(t)));
             ps.setTimestamp(6, toTimestamp(t.firstResponseAt));
             ps.setString(7, t.firstResponder);
             setNullableLong(ps, 8, t.frtSeconds);
@@ -967,15 +859,7 @@ public class AnalyticsSyncService {
             ps.setTimestamp(23, toTimestamp(t.awaitingSince));
             ps.setInt(24, t.replies);
             ps.setLong(25, t.replySeconds);
-        }
-
-        /**
-         * When this ticket's silence would cross the expiry threshold — derived
-         * from lastActivity on every write, so the column can never drift from
-         * the value {@link #applyInbound} compares against.
-         */
-        private LocalDateTime staleAt(Ticket t) {
-            return BusinessTime.plusBusinessSeconds(t.lastActivity, STALE_OPEN_SECONDS);
+            ps.setInt(26, t.resumes);
         }
 
         private void setNullableLong(PreparedStatement ps, int index, Long value) throws java.sql.SQLException {

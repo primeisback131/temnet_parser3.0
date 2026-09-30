@@ -95,7 +95,8 @@ public class LlmReopenClassifier {
         }
 
         List<Candidate> pending = analytics.query("""
-                        SELECT t.id, t.client, t.opened_at, p.opened_at AS prev_opened, p.closed_at AS prev_closed
+                        SELECT t.id, t.client, t.opened_at, p.opened_at AS prev_opened,
+                               COALESCE(p.closed_at, p.last_activity) AS prev_closed
                         FROM ticket t
                         JOIN ticket p ON p.id = t.reopened_from
                         WHERE t.reopen_llm = 'pending'
