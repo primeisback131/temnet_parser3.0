@@ -188,3 +188,9 @@ ALTER TABLE ticket ADD COLUMN IF NOT EXISTS reply_seconds BIGINT NOT NULL DEFAUL
 -- "Which of this operator's closures came back" joins the reopening ticket to
 -- the one it reopened; without the index every such lookup scans the table.
 ALTER TABLE ticket ADD INDEX IF NOT EXISTS idx_ticket_reopened_from (reopened_from);
+
+-- 2026-09-30: a client message within 15 minutes of a closure phrase puts the
+-- ticket back to work instead of opening a new one (operators close before
+-- the client has had their say). The count keeps the "closed too early"
+-- signal that used to show up as a quick reopen.
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS resumes INT NOT NULL DEFAULT 0 AFTER reply_seconds;

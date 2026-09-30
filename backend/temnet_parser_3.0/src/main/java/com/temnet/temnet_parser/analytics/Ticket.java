@@ -29,6 +29,9 @@ class Ticket {
     LocalDateTime awaitingSince;
     int replies;
     long replySeconds;
+    /** Times a client message right after a closure put the ticket back to work. */
+    // TODO(resumes): show "closed too early" on the metrics screen; stored since 2026-09-30.
+    int resumes;
 
     Ticket(String client, LocalDateTime openedAt) {
         this.client = client;
