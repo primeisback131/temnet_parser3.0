@@ -25,12 +25,12 @@ import dayjs from "dayjs";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
 import { useChatParticipants, useChatTickets, useChats, useGroups } from "../api/queries";
 import type { ChatMessage, ChatTicket } from "../api/types";
 import DrillNavigator, { useDrillNav } from "../components/DrillNavigator";
 import QueryError from "../components/QueryError";
 import { chartColors } from "../lib/chartTheme";
+import { exportGroupChats, exportRows } from "../lib/chatExport";
 import { defaultRange, toApiDate } from "../lib/date";
 import { asDrillKey, BURST_GAP_MINUTES } from "../lib/drillEvents";
 import { exportToExcel } from "../lib/excel";
@@ -41,18 +41,6 @@ const { RangePicker } = DatePicker;
 
 /** Messages of one side this close together read as one run: the time is shown once. */
 const RUN_GAP_MINUTES = 5;
-
-/** Excel rows with Russian headers, like every other export. */
-function exportRows(rows: ChatMessage[]) {
-  return rows.map((m) => ({
-    Дата: dayjs(m.createdAt).format("DD.MM.YYYY HH:mm:ss"),
-    Клиент: m.client,
-    Направление: m.direction === "out" ? "ответ поддержки" : "сообщение клиента",
-    Отправитель: m.sender,
-    Получатель: m.recipient,
-    Сообщение: m.message,
-  }));
-}
 
 /** The text with every case-insensitive occurrence of `q` wrapped in <mark>. */
 function highlight(text: string, q: string): ReactNode {
@@ -404,14 +392,7 @@ export default function ChatPage() {
     if (!group) return;
     setExportingAll(true);
     try {
-      const all = await api.getChats(startStr, endStr, group);
-      if (all.length === 0) {
-        message.info("За выбранный период переписки нет");
-        return;
-      }
-      await exportToExcel(exportRows(all), `AllChats_${group}_${startStr}_${endStr}.xlsx`, "Чаты");
-    } catch (e) {
-      message.error(e instanceof Error ? e.message : "Не удалось выгрузить переписку");
+      await exportGroupChats(message, start, end, group);
     } finally {
       setExportingAll(false);
     }
