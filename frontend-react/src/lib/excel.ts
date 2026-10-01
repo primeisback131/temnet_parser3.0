@@ -116,6 +116,20 @@ export function safeSheetName(name: string): string {
   return (cleaned || "Лист").slice(0, 31);
 }
 
+/**
+ * A safe sheet name not in `used` yet, which it is then added to. Excel sheet
+ * names are case-INsensitive: "Altair" and "altair" would collide, so `used`
+ * holds lower-case names.
+ */
+export function uniqueSheetName(name: string, used: Set<string>): string {
+  let result = safeSheetName(name);
+  for (let i = 2; used.has(result.toLowerCase()); i++) {
+    result = `${safeSheetName(name).slice(0, 28)}~${i}`;
+  }
+  used.add(result.toLowerCase());
+  return result;
+}
+
 /** Export one array of flat objects to an .xlsx file (single sheet). */
 export async function exportToExcel<T extends object>(
   rows: T[],

@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { HelpAccountReport } from "../api/types";
 import { monthlyRanges, toApiDate } from "./date";
 import { describeError } from "./errors";
-import { exportWorkbook, exportWorkbooksZip, safeSheetName, type SheetSpec, type WorkbookFile } from "./excel";
+import { exportWorkbook, exportWorkbooksZip, type SheetSpec, type WorkbookFile, uniqueSheetName } from "./excel";
 
 /** Groups a report slice by its groupName. */
 function byGroup<T extends { groupName: string }>(rows: T[]): Map<string, T[]> {
@@ -55,17 +55,10 @@ function helpReportSheets(report: HelpAccountReport): SheetSpec[] {
 
   const sheets: SheetSpec[] = [{ name: "Сводка по группам", rows: summary }];
 
-  // Excel sheet names are case-INsensitive: groups like "Altair" and
-  // "altair" would collide, so uniqueness is tracked in lower case.
   const usedNames = new Set(sheets.map((s) => s.name.toLowerCase()));
   for (const [groupName, groupUsers] of users) {
-    let name = safeSheetName(groupName);
-    for (let i = 2; usedNames.has(name.toLowerCase()); i++) {
-      name = `${safeSheetName(groupName).slice(0, 28)}~${i}`;
-    }
-    usedNames.add(name.toLowerCase());
     sheets.push({
-      name,
+      name: uniqueSheetName(groupName, usedNames),
       sections: [
         // The exact group name as a headline: the sheet tab can be mangled
         // (31-char limit, case-collision suffixes like "altair~2").
